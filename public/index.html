@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Replay VOD</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <a href="#/" class="brand">Replay VOD</a>
+    <nav>
+      <a href="#/">방송 목록</a>
+      <a href="#/new" class="button">+ 방송 등록</a>
+    </nav>
+  </header>
+
+  <main id="view" aria-live="polite"></main>
+
+  <!-- 방송 목록 -->
+  <template id="tpl-list">
+    <section>
+      <h1>녹화방송 목록</h1>
+      <p class="muted" data-role="status">불러오는 중…</p>
+      <ul class="grid" data-role="list"></ul>
+    </section>
+  </template>
+
+  <template id="tpl-card">
+    <li class="card">
+      <a data-role="link">
+        <div class="thumb"><span class="badge" data-role="badge"></span>▶</div>
+        <div class="card-body">
+          <h2 data-role="title"></h2>
+          <p class="muted" data-role="date"></p>
+        </div>
+      </a>
+    </li>
+  </template>
+
+  <!-- 방송 상세 + 플레이어 -->
+  <template id="tpl-detail">
+    <section>
+      <p><a href="#/">← 목록으로</a></p>
+      <p class="muted" data-role="status">불러오는 중…</p>
+      <article data-role="article" hidden>
+        <video data-role="player" controls preload="metadata" playsinline></video>
+        <p class="error" data-role="player-error" hidden>영상을 재생할 수 없습니다. 영상 위치를 확인해 주세요.</p>
+        <h1 data-role="title"></h1>
+        <p class="muted" data-role="meta"></p>
+        <p class="description" data-role="description"></p>
+        <dl class="info">
+          <dt>영상 위치</dt>
+          <dd><code data-role="location"></code></dd>
+        </dl>
+      </article>
+    </section>
+  </template>
+
+  <!-- 방송 등록 -->
+  <template id="tpl-new">
+    <section class="narrow">
+      <h1>녹화방송 등록</h1>
+      <form data-role="form" novalidate>
+        <label>제목 <span class="req">*</span>
+          <input name="title" maxlength="100" required placeholder="예) 11월 4일 정기 방송">
+        </label>
+        <label>설명
+          <textarea name="description" rows="3" maxlength="2000"></textarea>
+        </label>
+
+        <fieldset>
+          <legend>영상 <span class="req">*</span></legend>
+          <label class="inline"><input type="radio" name="source" value="upload" checked> 파일 업로드</label>
+          <label class="inline"><input type="radio" name="source" value="url"> 영상 URL 연결</label>
+
+          <div data-source="upload">
+            <input type="file" name="videoFile" accept="video/*">
+            <p class="muted">mp4/webm 등 브라우저에서 재생 가능한 형식을 권장합니다.</p>
+          </div>
+          <div data-source="url" hidden>
+            <input type="url" name="videoUrl" placeholder="https://example.com/recording.mp4">
+            <p class="muted">이미 저장되어 있는 영상 파일의 직접 주소(http/https)를 입력하세요.</p>
+          </div>
+        </fieldset>
+
+        <progress data-role="progress" max="100" value="0" hidden></progress>
+        <p class="error" data-role="error" hidden></p>
+        <button type="submit" class="button">등록하기</button>
+      </form>
+    </section>
+  </template>
+
+  <script src="/app.js" type="module"></script>
+</body>
+</html>
