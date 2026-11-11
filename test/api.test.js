@@ -3,8 +3,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { loadConfig } from '../src/config.js';
-import { openDatabase } from '../src/db.js';
+import { openDatabase } from '../src/database.js';
 import { createApp } from '../src/app.js';
 
 let tmpDir;
@@ -114,6 +115,24 @@ test('서버를 재시작해도 등록한 방송이 그대로 조회된다', asy
   assert.equal(list.length, 2);
   const media = await fetch(`${baseUrl}${list[1].videoSrc}`);
   assert.equal(media.status, 200);
+});
+
+test('마이그레이션 이전에 만든 DB도 데이터를 유지한 채 열린다', () => {
+  const legacyPath = path.join(tmpDir, 'legacy.db');
+  const legacy = new DatabaseSync(legacyPath);
+  legacy.exec(`
+    CREATE TABLE broadcasts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+      source_type TEXT NOT NULL, video_location TEXT NOT NULL, mime_type TEXT, file_size INTEGER,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')));
+    INSERT INTO broadcasts (title, source_type, video_location) VALUES ('예전 방송', 'url', 'https://a.com/x.mp4');
+  `);
+  legacy.close();
+
+  const reopened = openDatabase(legacyPath);
+  assert.equal(reopened.prepare('PRAGMA user_version').get().user_version, 1);
+  assert.equal(reopened.prepare('SELECT title FROM broadcasts').get().title, '예전 방송');
+  reopened.close();
 });
 
 test('인증 없이 화면과 API에 접근할 수 있다', async () => {

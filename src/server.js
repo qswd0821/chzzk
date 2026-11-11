@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import { loadConfig } from './config.js';
-import { openDatabase } from './db.js';
+import { openDatabase } from './database.js';
 import { createApp } from './app.js';
 
 const config = loadConfig();

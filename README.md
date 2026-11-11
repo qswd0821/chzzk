@@ -48,13 +48,15 @@ MAX_UPLOAD_MB=500
 
 ### 포함
 
-| 요구 사항 | 구현 위치 |
-| --- | --- |
-| 녹화 영상 + 제목 등록 (파일 업로드 **또는** 영상 URL 연결) | `POST /api/broadcasts` — [src/app.js](src/app.js), 등록 화면 `#/new` — [public/app.js](public/app.js) `renderNew` |
-| 방송 목록 화면 | `GET /api/broadcasts`, 화면 `#/` — `renderList` |
-| 상세 화면 + 영상 재생 | `GET /api/broadcasts/:id`, 화면 `#/broadcasts/:id` — `renderDetail`, `<video controls>` |
-| 방송 정보와 영상 위치 영속 저장·재조회 | [src/db.js](src/db.js) — SQLite `broadcasts` 테이블 |
-| 로그인 없이 이용 | 인증 미들웨어·세션·계정 없음. 모든 화면과 API가 공개 |
+체크리스트 항목별 구현 위치:
+
+| 체크리스트 | 서버 | 화면 |
+| --- | --- | --- |
+| 녹화 영상의 제목과 파일 또는 영상 위치를 등록 | `POST /api/broadcasts` — [broadcast.router.js](src/broadcasts/broadcast.router.js) → [broadcast.service.js](src/broadcasts/broadcast.service.js) `register`, 파일 저장은 [video-storage.js](src/storage/video-storage.js) | 등록 화면 `#/new` — [public/app.js](public/app.js) `renderNew`, 폼은 [public/index.html](public/index.html) `tpl-new` |
+| 녹화방송 목록과 상세 화면 및 영상 플레이어 | `GET /api/broadcasts`, `GET /api/broadcasts/:id` — `service.list` / `service.get`, 영상 파일 `GET /media/:file` | 목록 `#/` — `renderList`, 상세 `#/broadcasts/:id` — `renderDetail` + `<video controls>` (`tpl-detail`) |
+| 방송 메타데이터를 영속 저장하고 조회 | SQLite 스키마·마이그레이션 [src/database.js](src/database.js), 저장·조회 [broadcast.repository.js](src/broadcasts/broadcast.repository.js) | — |
+| 로그인 없이 등록·조회 화면과 서버 기능 이용 | [src/app.js](src/app.js) — 인증·세션 미들웨어 없이 라우터와 정적 화면을 바로 연결 | 로그인 화면·토큰 처리 없음 |
+| README | 이 문서: 실행 방법, 환경변수, 구현 범위, 직접 확인 절차 | — |
 
 세부 동작:
 
@@ -126,19 +128,36 @@ MAX_UPLOAD_MB=500
    ```
 
 자동 테스트(`npm test`)는 임시 디렉터리에서 서버를 띄워 업로드·URL 등록, 목록·상세 조회, 입력 검증과 실패 시 파일 정리,
-업로드 영상의 Range 응답, 서버 재시작 후 데이터 유지, 비로그인 접근을 확인합니다.
+업로드 영상의 Range 응답, 서버 재시작 후 데이터 유지, 이전 스키마 DB의 마이그레이션, 비로그인 접근을 확인합니다.
 
 ## 디렉터리 구조
 
 ```
 chzzk/
 ├─ src/
-│  ├─ server.js   # 진입점: 설정 로드, DB 열기, 서버 실행
-│  ├─ config.js   # 환경변수 → 설정
-│  ├─ db.js       # SQLite 스키마와 저장/조회
-│  └─ app.js      # Express 라우트, 업로드 처리, 검증
-├─ public/        # 목록·상세·등록 화면 (index.html, app.js, style.css)
-├─ test/          # node:test API 테스트
-├─ data/          # (실행 시 생성) replay.db, uploads/
+│  ├─ server.js                 # 진입점: 설정 로드, DB 열기, 서버 실행
+│  ├─ config.js                 # 환경변수 → 설정
+│  ├─ app.js                    # 의존성 조립, 라우터·정적 파일·에러 핸들러 연결
+│  ├─ database.js               # SQLite 연결과 버전별 마이그레이션(PRAGMA user_version)
+│  ├─ http/errors.js            # HttpError, 공통 에러 응답
+│  ├─ storage/video-storage.js  # 업로드 영상 저장·삭제·서빙(/media)
+│  └─ broadcasts/               # 녹화방송 모듈
+│     ├─ broadcast.router.js     # HTTP ↔ 서비스 (요청 파싱, 상태 코드)
+│     ├─ broadcast.service.js    # 등록 검증, 영상 위치 종류, 재생 주소(videoSrc) 계산
+│     └─ broadcast.repository.js # broadcasts 테이블 SQL
+├─ public/                      # 목록·상세·등록 화면 (index.html, app.js, style.css)
+├─ test/                        # node:test API 테스트
+├─ data/                        # (실행 시 생성) replay.db, uploads/
 └─ .env.example
 ```
+
+요청은 `router → service → repository / storage` 한 방향으로만 흐릅니다. 서비스는 HTTP와 SQL을 모르고,
+라우터는 검증 규칙을 모릅니다.
+
+### 다음 단계로 확장할 때
+
+각 단계는 이 단계의 녹화방송 기능을 유지한 채 확장합니다.
+
+- **새 기능**(댓글, 도네이션 등): `src/<기능>/` 에 router·service·repository 를 같은 모양으로 만들고 [src/app.js](src/app.js) 에서 라우터를 하나 더 연결합니다.
+- **테이블 추가·변경**: [src/database.js](src/database.js) 의 `MIGRATIONS` 배열 끝에 SQL을 추가합니다. 이미 적용된 항목은 다시 실행되지 않으므로 기존 방송 데이터가 유지됩니다.
+- **인증·인가**: 인증 미들웨어를 `app.js` 에서 필요한 라우터 앞에만 끼웁니다. 녹화방송 조회처럼 공개로 둘 경로는 그대로 둘 수 있습니다.
