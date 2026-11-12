@@ -6,7 +6,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { loadConfig } from '../src/config.js';
 import { openDatabase } from '../src/database.js';
-import { createApp } from '../src/app.js';
+import { createApplication } from '../src/app.js';
 
 let tmpDir;
 let config;
@@ -16,7 +16,8 @@ let baseUrl;
 
 function start() {
   db = openDatabase(config.dbPath);
-  server = createApp({ db, config }).listen(0);
+  const { app, attachTo } = createApplication({ db, config });
+  server = attachTo(app.listen(0));
   baseUrl = `http://127.0.0.1:${server.address().port}`;
 }
 
@@ -130,7 +131,7 @@ test('마이그레이션 이전에 만든 DB도 데이터를 유지한 채 열�
   legacy.close();
 
   const reopened = openDatabase(legacyPath);
-  assert.equal(reopened.prepare('PRAGMA user_version').get().user_version, 1);
+  assert.equal(reopened.prepare('PRAGMA user_version').get().user_version, 2);
   assert.equal(reopened.prepare('SELECT title FROM broadcasts').get().title, '예전 방송');
   reopened.close();
 });
@@ -138,5 +139,5 @@ test('마이그레이션 이전에 만든 DB도 데이터를 유지한 채 열�
 test('인증 없이 화면과 API에 접근할 수 있다', async () => {
   const page = await fetch(`${baseUrl}/`);
   assert.equal(page.status, 200);
-  assert.match(await page.text(), /Replay VOD/);
+  assert.match(await page.text(), /치지직/);
 });

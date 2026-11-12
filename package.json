@@ -2,7 +2,7 @@
   "name": "replay-vod",
   "version": "0.1.0",
   "private": true,
-  "description": "로그인 없이 녹화방송을 등록하고 시청하는 서비스",
+  "description": "로그인 없이 녹화방송과 휴대폰 라이브 방송을 올리고 보는 서비스",
   "type": "module",
   "main": "src/server.js",
   "engines": {
@@ -15,6 +15,8 @@
   },
   "dependencies": {
     "express": "^4.21.2",
-    "multer": "^2.0.2"
+    "multer": "^2.0.2",
+    "selfsigned": "^5.5.0",
+    "ws": "^8.22.2"
   }
 }

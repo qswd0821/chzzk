@@ -3,24 +3,30 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Replay VOD</title>
+  <title>치지직</title>
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
   <header class="topbar">
-    <a href="#/" class="brand">Replay VOD</a>
+    <a href="#/" class="brand">치지직</a>
     <nav>
       <a href="#/">방송 목록</a>
-      <a href="#/new" class="button">+ 방송 등록</a>
+      <a href="#/new" class="button secondary">+ 녹화방송 등록</a>
+      <a href="#/live/new" class="button live">● 라이브 시작</a>
     </nav>
   </header>
 
   <main id="view" aria-live="polite"></main>
 
-  <!-- 방송 목록 -->
+  <!-- 방송 목록: 라이브 방송 + 녹화방송 -->
   <template id="tpl-list">
     <section>
-      <h1>녹화방송 목록</h1>
+      <h1>라이브 방송</h1>
+      <p class="muted" data-role="live-status">불러오는 중…</p>
+      <ul class="grid" data-role="live-list"></ul>
+    </section>
+    <section>
+      <h1>녹화방송</h1>
       <p class="muted" data-role="status">불러오는 중…</p>
       <ul class="grid" data-role="list"></ul>
     </section>
@@ -38,7 +44,7 @@
     </li>
   </template>
 
-  <!-- 방송 상세 + 플레이어 -->
+  <!-- 녹화방송 상세 + 플레이어 -->
   <template id="tpl-detail">
     <section>
       <p><a href="#/">← 목록으로</a></p>
@@ -57,7 +63,7 @@
     </section>
   </template>
 
-  <!-- 방송 등록 -->
+  <!-- 녹화방송 등록 -->
   <template id="tpl-new">
     <section class="narrow">
       <h1>녹화방송 등록</h1>
@@ -88,6 +94,56 @@
         <p class="error" data-role="error" hidden></p>
         <button type="submit" class="button">등록하기</button>
       </form>
+    </section>
+  </template>
+
+  <!-- 라이브 송출 (휴대폰) -->
+  <template id="tpl-go-live">
+    <section class="narrow">
+      <h1>라이브 송출</h1>
+      <p class="error" data-role="unsupported" hidden>
+        이 주소에서는 카메라·마이크를 쓸 수 없습니다. 휴대폰에서는 <strong>https://</strong> 주소로 접속해 주세요.
+      </p>
+      <div class="stage">
+        <video data-role="preview" autoplay muted playsinline></video>
+        <span class="live-badge" data-role="on-air" hidden>● 방송 중</span>
+      </div>
+      <div class="row">
+        <button type="button" class="button secondary" data-role="camera">카메라·마이크 켜기</button>
+        <button type="button" class="button secondary" data-role="flip" hidden>↻ 카메라 전환</button>
+      </div>
+      <form data-role="form" novalidate>
+        <label>방송 제목 <span class="req">*</span>
+          <input name="title" maxlength="100" required placeholder="예) 퇴근길 라이브">
+        </label>
+        <button type="submit" class="button live" data-role="start" disabled>● 송출 시작</button>
+      </form>
+      <div data-role="controls" hidden>
+        <p><strong data-role="viewers">시청자 0명</strong> · <a data-role="watch-link" target="_blank">시청 화면 열기</a></p>
+        <button type="button" class="button danger" data-role="end">■ 송출 종료</button>
+      </div>
+      <p class="muted" data-role="message"></p>
+      <p class="error" data-role="error" hidden></p>
+    </section>
+  </template>
+
+  <!-- 라이브 시청 -->
+  <template id="tpl-watch-live">
+    <section>
+      <p><a href="#/">← 목록으로</a></p>
+      <p class="muted" data-role="status">불러오는 중…</p>
+      <article data-role="article" hidden>
+        <div class="stage">
+          <video data-role="player" autoplay muted playsinline controls></video>
+          <span class="live-badge" data-role="badge"></span>
+        </div>
+        <div class="row">
+          <button type="button" class="button secondary" data-role="unmute">🔊 소리 켜기</button>
+        </div>
+        <h1 data-role="title"></h1>
+        <p class="muted" data-role="meta"></p>
+        <p class="muted" data-role="message"></p>
+      </article>
     </section>
   </template>
 

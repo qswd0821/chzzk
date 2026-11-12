@@ -14,6 +14,14 @@ const MIGRATIONS = [
      file_size      INTEGER,
      created_at     TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
    )`,
+  // 2: 라이브 방송과 방송 상태
+  `CREATE TABLE IF NOT EXISTS live_broadcasts (
+     id         INTEGER PRIMARY KEY AUTOINCREMENT,
+     title      TEXT    NOT NULL,
+     status     TEXT    NOT NULL CHECK (status IN ('live', 'ended')),
+     started_at TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+     ended_at   TEXT
+   )`,
 ];
 
 export function openDatabase(dbPath) {
