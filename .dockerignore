@@ -8,3 +8,7 @@ docs
 k8s
 load
 *.md
+deploy
+client
+.github
+scripts

@@ -29,6 +29,7 @@ export async function attachLiveSignaling({
   bus,
   authenticate,
   instanceId,
+  isAllowedClient = () => false,
   reconnectGraceMs = 20_000,
   heartbeatMs = 15_000,
 }) {
@@ -37,7 +38,8 @@ export async function attachLiveSignaling({
     path: SIGNALING_PATH,
     maxPayload: 64 * 1024,
     // 다른 사이트의 페이지가 로그인한 회원의 브라우저로 송출 연결을 여는 것을 막는다.
-    verifyClient: ({ req }) => isSameOrigin(req),
+    // 데스크톱 클라이언트(허용 출처)는 시청자로만 참여할 수 있다(아래에서 회원으로 인정하지 않음).
+    verifyClient: ({ req }) => isSameOrigin(req) || isAllowedClient(req),
   });
   const rooms = new Map(); // liveId → { broadcaster: { socket, connId } | null, viewers: Map<viewerId, socket> }
   let nextViewer = 1;
@@ -104,7 +106,8 @@ export async function attachLiveSignaling({
     socket.isAlive = true;
     socket.on('pong', () => { socket.isAlive = true; });
 
-    const member = authenticate(req);
+    // 다른 출처(데스크톱 클라이언트)에서 온 연결은 쿠키가 있어도 회원으로 보지 않는다 → 송출자 참여 불가
+    const member = isSameOrigin(req) ? authenticate(req) : null;
     let session = null; // { role, liveId, viewerId?, connId?, refresh? }
 
     socket.on('message', async (raw) => {

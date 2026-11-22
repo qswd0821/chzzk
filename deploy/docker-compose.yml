@@ -1,0 +1,50 @@
+# OCI VM(단일 서버) 배포: 앱 + Caddy(리버스 프록시·Let's Encrypt 자동 HTTPS)
+#   cp deploy/.env.example deploy/.env  → DOMAIN 등 수정
+#   docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d --build   (= scripts/deploy.sh)
+# 상태는 이름 있는 볼륨에 둔다: chzzk-data(DB·업로드), caddy-data(인증서)
+name: chzzk
+
+services:
+  app:
+    build:
+      context: ..
+    image: chzzk:prod
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      PORT: "3000"
+      DATA_DIR: /data
+      HTTPS: "false" # TLS 는 Caddy 가 맡는다
+      TRUST_PROXY: uniquelocal # Caddy(도커 사설망)가 붙인 X-Forwarded-Proto 를 믿어 세션 쿠키에 Secure 를 붙인다
+    volumes:
+      - chzzk-data:/data
+    expose:
+      - "3000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DOMAIN: ${DOMAIN:?deploy/.env 에 DOMAIN 을 설정하세요}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  chzzk-data:
+  caddy-data:
+  caddy-config:

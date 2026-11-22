@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <!-- 접속 서버를 설정에서 바꿀 수 있으므로 http(s)/ws(s) 연결을 허용하고, 스크립트는 앱 자신의 파일만 허용한다. -->
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: http: https:; media-src 'self' blob: http: https:; connect-src 'self' http: https: ws: wss:">
+  <title>치지직</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <button type="button" class="brand" data-role="home">치지직 <span class="badge-app">Desktop</span></button>
+    <div class="server" data-role="server" title="접속 중인 서버"></div>
+    <nav>
+      <button type="button" class="button secondary" data-role="refresh">새로고침</button>
+      <button type="button" class="button secondary" data-role="open-web">웹에서 열기</button>
+      <button type="button" class="button secondary" data-role="settings">설정</button>
+    </nav>
+  </header>
+
+  <main id="view"></main>
+
+  <dialog data-role="settings-dialog">
+    <form method="dialog" data-role="settings-form">
+      <h2>설정</h2>
+      <label>서버 주소
+        <input name="serverUrl" type="url" required placeholder="https://chzzk.example.com">
+      </label>
+      <p class="muted small">배포된 치지직 서버 주소입니다. 로컬 개발 서버는 http://localhost:3000</p>
+      <p class="error" data-role="settings-error" hidden></p>
+      <div class="row">
+        <button type="submit" class="button" value="save">저장</button>
+        <button type="submit" class="button secondary" value="cancel" formnovalidate>취소</button>
+      </div>
+      <p class="muted small" data-role="about"></p>
+    </form>
+  </dialog>
+
+  <div class="toast-area" data-role="toasts"></div>
+
+  <template id="tpl-list">
+    <section>
+      <h1>라이브 방송</h1>
+      <p class="muted" data-role="live-status">불러오는 중…</p>
+      <ul class="grid" data-role="live-list"></ul>
+    </section>
+    <section>
+      <h1>녹화방송</h1>
+      <p class="muted" data-role="status">불러오는 중…</p>
+      <ul class="grid" data-role="list"></ul>
+    </section>
+  </template>
+
+  <template id="tpl-card">
+    <li class="card">
+      <button type="button" data-role="open">
+        <div class="thumb"><span class="badge" data-role="badge"></span>▶</div>
+        <div class="card-body">
+          <h2 data-role="title"></h2>
+          <p class="muted" data-role="meta"></p>
+        </div>
+      </button>
+    </li>
+  </template>
+
+  <template id="tpl-player">
+    <section class="player-page">
+      <p><button type="button" class="link" data-role="back">← 목록으로</button></p>
+      <div class="stage">
+        <video data-role="video" controls playsinline autoplay></video>
+        <span class="live-badge" data-role="live-badge" hidden></span>
+      </div>
+      <p class="error" data-role="error" hidden></p>
+      <div class="row">
+        <button type="button" class="button secondary" data-role="unmute" hidden>🔊 소리 켜기</button>
+        <button type="button" class="button secondary" data-role="web">웹에서 댓글·후원하기</button>
+      </div>
+      <h1 data-role="title"></h1>
+      <p class="muted" data-role="meta"></p>
+      <p class="description" data-role="description"></p>
+      <div class="side">
+        <section>
+          <h2>후원 <span class="muted" data-role="donation-total"></span></h2>
+          <ul class="mini-list" data-role="donations"></ul>
+        </section>
+        <section>
+          <h2>댓글 <span class="muted" data-role="comment-count"></span></h2>
+          <ul class="mini-list" data-role="comments"></ul>
+        </section>
+      </div>
+    </section>
+  </template>
+
+  <script src="app.js" type="module"></script>
+</body>
+</html>

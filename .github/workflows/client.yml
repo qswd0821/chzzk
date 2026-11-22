@@ -1,0 +1,109 @@
+# 데스크톱 클라이언트(client/)를 Windows·macOS 러너에서 빌드하고, 실제로 실행해 방송 목록·재생을 확인한 뒤
+# 태그(client-v*)면 GitHub Releases 에 올린다. 다운로드 페이지(/download)는 최신 릴리스의 파일로 연결된다.
+#   릴리스:       git tag client-v1.0.0 && git push origin client-v1.0.0
+#   빌드만 확인:  Actions → desktop-client → Run workflow
+# 앱의 기본 서버 주소는 저장소 변수 CHZZK_SERVER_URL(예: https://chzzk.example.com) 또는 수동 실행 입력값으로 넣는다.
+name: desktop-client
+
+on:
+  push:
+    tags: ["client-v*"]
+  workflow_dispatch:
+    inputs:
+      server_url:
+        description: "앱의 기본 서버 주소 (비우면 저장소 변수 CHZZK_SERVER_URL)"
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x64
+            os: windows-latest
+            build: --win
+            app: client/dist/win-unpacked/Chzzk.exe
+          - name: macos
+            os: macos-latest # Apple Silicon 러너. arm64·x64 패키지를 모두 만들고 arm64 앱을 실행해 확인한다.
+            build: --mac
+            app: client/dist/mac-arm64/Chzzk.app/Contents/MacOS/Chzzk
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            client/package-lock.json
+
+      - name: 앱 기본 서버 주소 넣기
+        env:
+          SERVER_URL: ${{ inputs.server_url || vars.CHZZK_SERVER_URL || 'http://localhost:3000' }}
+        run: |
+          node -e "require('fs').writeFileSync('client/app-config.json', JSON.stringify({ defaultServerUrl: process.env.SERVER_URL }, null, 2) + '\n')"
+          cat client/app-config.json
+
+      - name: 의존성 설치
+        run: |
+          npm ci --omit=dev
+          npm ci --prefix client
+
+      - name: 패키지 빌드 (서명 없음)
+        working-directory: client
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: npx electron-builder ${{ matrix.build }} --publish never
+
+      - name: 자동 확인용 백엔드 실행
+        run: |
+          PORT=3100 DATA_DIR="$RUNNER_TEMP/chzzk-data" INSTANCE_ID=ci nohup node src/server.js > "$RUNNER_TEMP/server.log" 2>&1 &
+          node client/scripts/seed-smoke.mjs http://127.0.0.1:3100
+
+      - name: 패키지된 앱 실행해 방송 목록·재생 확인 (--smoke)
+        run: |
+          "${{ matrix.app }}" --smoke --server=http://127.0.0.1:3100 --screenshot="$RUNNER_TEMP/smoke-${{ matrix.name }}.png" | tee "$RUNNER_TEMP/smoke-${{ matrix.name }}.json"
+          grep -q '"smoke":"pass"' "$RUNNER_TEMP/smoke-${{ matrix.name }}.json"
+
+      - name: 결과 보관
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chzzk-${{ matrix.name }}
+          if-no-files-found: warn
+          path: |
+            client/dist/*.exe
+            client/dist/*.zip
+            client/dist/*.dmg
+            ${{ runner.temp }}/smoke-*.png
+            ${{ runner.temp }}/smoke-*.json
+            ${{ runner.temp }}/server.log
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/client-v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: GitHub Releases 에 올리기
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          ls -R artifacts
+          find artifacts -type f \( -name 'Chzzk-*.exe' -o -name 'Chzzk-*.zip' -o -name 'Chzzk-*.dmg' \) -exec cp {} . \;
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "치지직 데스크톱 $TAG" \
+            --notes "Windows x64(.exe 설치 / .zip 무설치), macOS Apple Silicon·Intel(.dmg / .zip). 서명하지 않은 앱입니다 — 설치·실행 방법은 /download 페이지를 보세요." \
+            Chzzk-*.exe Chzzk-*.zip Chzzk-*.dmg

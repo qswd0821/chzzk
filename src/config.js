@@ -24,6 +24,15 @@ export function loadConfig(env = process.env) {
     payment: buildPaymentConfig(env),
     // 여러 인스턴스로 돌 때(docs/adr/0003). REDIS_URL 이 없으면 단일 인스턴스용 메모리 버스를 쓴다.
     redisUrl: env.REDIS_URL?.trim() || null,
+    // 배포 주소(6단계). 다운로드 페이지·README 안내에 쓴다. 예: https://chzzk.example.com
+    // 리버스 프록시(Caddy·Traefik) 뒤에서 X-Forwarded-Proto 를 믿을 대상. HTTPS 판단(세션 쿠키 Secure)에 쓴다.
+    //   loopback(기본) | uniquelocal(도커·k8s 사설망) | true 등 Express trust proxy 값
+    trustProxy: env.TRUST_PROXY?.trim() || 'loopback',
+    publicUrl: env.PUBLIC_URL?.trim().replace(/\/$/, '') || null,
+    // 공개 조회 API·시청자 WebSocket 을 허용할 다른 출처(데스크톱 클라이언트). 쉼표로 여러 개.
+    allowedOrigins: (env.ALLOWED_ORIGINS ?? 'app://chzzk').split(',').map((o) => o.trim()).filter(Boolean),
+    // 데스크톱 클라이언트 설치 파일이 있는 곳(GitHub Releases 의 최신 릴리스)
+    downloadBaseUrl: (env.DOWNLOAD_BASE_URL?.trim() || 'https://github.com/qswd0821/chzzk/releases/latest/download').replace(/\/$/, ''),
     // k8s 에서는 파드 이름(HOSTNAME)이 인스턴스 이름이 된다.
     instanceId: env.INSTANCE_ID?.trim() || env.HOSTNAME?.trim() || os.hostname(),
     live: {

@@ -1,0 +1,86 @@
+{
+  "name": "chzzk-desktop",
+  "productName": "Chzzk",
+  "version": "1.0.0",
+  "private": true,
+  "description": "치지직 데스크톱 클라이언트 — 배포된 백엔드의 방송 목록을 보고 녹화방송·라이브를 시청",
+  "author": "chzzk",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "smoke": "electron . --smoke",
+    "dist:win": "electron-builder --win --publish never",
+    "dist:mac": "electron-builder --mac --publish never"
+  },
+  "devDependencies": {
+    "electron": "^45.4.1",
+    "electron-builder": "^26.18.0"
+  },
+  "build": {
+    "appId": "kr.chzzk.desktop",
+    "productName": "Chzzk",
+    "copyright": "chzzk",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "app-config.json",
+      "renderer/**/*"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "Chzzk-${os}-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "shortcutName": "치지직",
+      "artifactName": "Chzzk-Setup-win-${arch}.${ext}"
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
+      "category": "public.app-category.entertainment",
+      "identity": null,
+      "hardenedRuntime": false,
+      "artifactName": "Chzzk-mac-${arch}.${ext}"
+    },
+    "dmg": {
+      "title": "Chzzk"
+    }
+  },
+  "allowScripts": {
+    "electron@45.4.1": true
+  }
+}

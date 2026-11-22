@@ -20,6 +20,8 @@ import { createDonationService } from './donations/donation.service.js';
 import { createDonationRouter, createTargetDonationRouter } from './donations/donation.router.js';
 import { createPaymentProvider } from './donations/providers/index.js';
 import { apiNotFoundHandler, errorHandler } from './http/errors.js';
+import { allowClientOrigins, isAllowedClientOrigin } from './http/cors.js';
+import { createClientRouter } from './client/client.router.js';
 
 // 의존성을 조립해 Express 앱을 만든다.
 // 모든 요청은 loadMember 를 거쳐 req.member(로그인 회원 또는 null)를 갖고, 각 서비스가 그 회원으로 권한을 검사한다.
@@ -51,7 +53,7 @@ export function createApplication({ db, config, bus, liveOptions = {} }) {
 
   const app = express();
   app.disable('x-powered-by');
-  app.set('trust proxy', 'loopback');
+  app.set('trust proxy', config.trustProxy === 'true' ? true : config.trustProxy);
 
   // 어느 인스턴스가 응답했는지(요청 분산 확인용)
   app.use((_req, res, next) => {
@@ -71,7 +73,10 @@ export function createApplication({ db, config, bus, liveOptions = {} }) {
   });
 
   app.use(loadMember(auth));
+  // 데스크톱 클라이언트(app://chzzk)에는 공개 조회(GET)만 허용한다. 쓰기는 아래 rejectCrossOrigin 이 막는다.
+  app.use('/api', allowClientOrigins(config.allowedOrigins));
   app.use('/api', rejectCrossOrigin);
+  app.use('/api/client', createClientRouter({ config }));
 
   app.use('/api/auth', createAuthRouter({ service: auth }));
   app.use('/api/broadcasts/:id/comments', createTargetCommentRouter({ service: comments, targetType: CommentTarget.BROADCAST }));
@@ -90,6 +95,8 @@ export function createApplication({ db, config, bus, liveOptions = {} }) {
 
   // 결제창이 돌아오는 주소(successUrl/failUrl). 결제 서비스가 ?paymentKey=… 등을 붙이므로 해시가 아닌 경로로 받는다.
   app.get(['/donation/success', '/donation/fail'], (_req, res) => res.sendFile(path.join(config.publicDir, 'index.html')));
+  // 데스크톱 클라이언트 다운로드 페이지
+  app.get('/download', (_req, res) => res.sendFile(path.join(config.publicDir, 'download.html')));
   app.use(express.static(config.publicDir));
 
   app.use('/api', apiNotFoundHandler);
@@ -107,6 +114,7 @@ export function createApplication({ db, config, bus, liveOptions = {} }) {
         service: lives,
         bus,
         instanceId: config.instanceId,
+        isAllowedClient: (req) => isAllowedClientOrigin(config.allowedOrigins, req),
         authenticate: (req) => auth.authenticate(readSessionToken(req)),
         ...liveOptions,
       });

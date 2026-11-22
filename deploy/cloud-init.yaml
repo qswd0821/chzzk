@@ -1,0 +1,25 @@
+#cloud-config
+# OCI 인스턴스 생성 화면의 "Show advanced options → Management → Cloud-init script" 에 붙여 넣는다.
+# 대상 이미지: Canonical Ubuntu 24.04 (aarch64 = A1.Flex, x86_64 = E2.1.Micro 모두 가능)
+# 하는 일: Docker·Compose·git 설치, OS 방화벽에서 80/443 열기, 저장소 클론, 메모리가 작으면 스왑 2GB
+package_update: true
+packages:
+  - docker.io
+  - docker-compose-v2
+  - git
+  - iptables-persistent
+
+runcmd:
+  - systemctl enable --now docker
+  - usermod -aG docker ubuntu
+  # OCI 의 Ubuntu 이미지는 iptables 기본 규칙이 22 번만 허용한다. 보안 목록(VCN)과 별개로 OS 방화벽도 열어야 한다.
+  - iptables -I INPUT 6 -m state --state NEW -p tcp --dport 80 -j ACCEPT
+  - iptables -I INPUT 6 -m state --state NEW -p tcp --dport 443 -j ACCEPT
+  - iptables -I INPUT 6 -m state --state NEW -p udp --dport 443 -j ACCEPT
+  - netfilter-persistent save
+  # 메모리 1GB 인 E2.1.Micro 대안일 때 이미지 빌드가 버티도록 스왑을 만든다(A1 12GB 에서는 건너뜀).
+  - [sh, -c, 'if [ "$(awk ''/MemTotal/{print int($2/1024)}'' /proc/meminfo)" -lt 2048 ] && [ ! -f /swapfile ]; then fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile && echo "/swapfile none swap sw 0 0" >> /etc/fstab; fi']
+  - git clone https://github.com/qswd0821/chzzk.git /opt/chzzk
+  - cp /opt/chzzk/deploy/.env.example /opt/chzzk/deploy/.env
+  - chown -R ubuntu:ubuntu /opt/chzzk
+  - [sh, -c, 'echo "치지직 VM 준비 완료: /opt/chzzk/deploy/.env 의 DOMAIN 을 고친 뒤 /opt/chzzk/scripts/deploy.sh 실행" > /etc/motd']

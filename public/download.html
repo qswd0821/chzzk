@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>치지직 데스크톱 앱 다운로드</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <a href="/#/" class="brand">치지직</a>
+    <nav><a href="/#/">방송 목록</a></nav>
+  </header>
+
+  <main class="download-page">
+    <h1>치지직 데스크톱 앱</h1>
+    <p class="muted">
+      Windows·macOS 에서 방송 목록을 보고 녹화방송·라이브를 시청하는 앱입니다.
+      로그인·방송 등록·송출·후원은 앱의 "웹에서 열기"로 브라우저에서 합니다.
+    </p>
+    <p class="recommend" data-role="recommend" hidden></p>
+
+    <section class="download-grid">
+      <article class="download-card" data-os="windows">
+        <h2>Windows</h2>
+        <p class="muted">Windows 10·11, <strong>x64</strong> (ARM64 PC 는 x64 에뮬레이션으로 실행)</p>
+        <ul class="download-links" data-role="links-windows"></ul>
+        <h3>설치·실행</h3>
+        <ol>
+          <li><strong>설치 파일(.exe)</strong>을 내려받아 실행 → 설치 위치 선택 → 완료하면 시작 메뉴·바탕화면에 "치지직"이 생깁니다.</li>
+          <li>또는 <strong>무설치(.zip)</strong>를 풀고 <code>Chzzk.exe</code> 를 실행합니다.</li>
+          <li>서명하지 않은 앱이라 <strong>"Windows의 PC 보호"</strong> 창이 뜨면 <em>추가 정보 → 실행</em>을 누릅니다.</li>
+        </ol>
+      </article>
+
+      <article class="download-card" data-os="macos">
+        <h2>macOS</h2>
+        <p class="muted">macOS 12 이상, <strong>Apple Silicon(arm64)</strong> · <strong>Intel(x64)</strong> 각각 제공</p>
+        <ul class="download-links" data-role="links-macos"></ul>
+        <h3>설치·실행</h3>
+        <ol>
+          <li>내 Mac 에 맞는 <strong>.dmg</strong> 를 열고 "치지직"을 <em>응용 프로그램</em> 폴더로 끌어 놓습니다. ( <em>Apple 메뉴 → 이 Mac에 관하여</em> 에서 칩이 Apple M… 이면 Apple Silicon, Intel 이면 Intel )</li>
+          <li>서명하지 않은 앱이라 처음에는 <strong>응용 프로그램 폴더에서 앱을 우클릭 → 열기 → 열기</strong>로 실행합니다.</li>
+          <li>"손상되었기 때문에 열 수 없습니다"가 뜨면 터미널에서 <code>xattr -dr com.apple.quarantine /Applications/Chzzk.app</code> 후 다시 엽니다.</li>
+        </ol>
+      </article>
+    </section>
+
+    <section>
+      <h2>앱에서 확인하기</h2>
+      <ol>
+        <li>앱을 열면 이 서비스(<code data-role="server-url">배포 주소</code>)의 <strong>방송 목록</strong>(라이브 방송·녹화방송)이 보입니다.</li>
+        <li>녹화방송을 누르면 바로 <strong>재생</strong>되고, ● 방송 중인 라이브를 누르면 <strong>실시간 시청</strong>이 시작됩니다.</li>
+        <li>다른 서버에 연결하려면 앱 오른쪽 위 <em>설정</em>에서 서버 주소를 바꿉니다.</li>
+      </ol>
+      <p class="muted">모든 파일과 이전 버전: <a data-role="releases" href="https://github.com/qswd0821/chzzk/releases">GitHub Releases</a></p>
+    </section>
+  </main>
+
+  <script src="/download.js" type="module"></script>
+</body>
+</html>

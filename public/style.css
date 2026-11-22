@@ -246,3 +246,16 @@ input[type=number] {
 .mock-actions { display: grid; gap: 10px; margin: 20px 0; }
 .mock-tamper { margin-top: 16px; }
 .mock-tamper label { margin-top: 8px; }
+
+/* 데스크톱 앱 다운로드 */
+.download-page { max-width: 960px; }
+.recommend { padding: 10px 14px; border-radius: 10px; background: var(--surface); border: 1px solid var(--accent); }
+.download-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin: 20px 0 32px; }
+.download-card { padding: 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+.download-card.recommended { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent) inset; }
+.download-card h2 { margin: 0 0 4px; font-size: 1.2rem; }
+.download-card h3 { font-size: 1rem; margin: 16px 0 6px; }
+.download-card ol { padding-left: 20px; margin: 0; display: grid; gap: 6px; font-size: 0.92rem; }
+.download-links { list-style: none; padding: 0; margin: 12px 0 0; display: grid; gap: 8px; }
+.download-links li { display: grid; gap: 2px; }
+.download-links code { font-size: 0.75rem; color: var(--muted); }
