@@ -1,9 +1,9 @@
 import express from 'express';
 
-// /api/lives — 로그인 없이 누구나 라이브 방송을 시작하고 시청한다.
-// 종료만은 시작할 때 받은 송출 키(X-Stream-Key 헤더)가 있어야 한다.
+// /api/lives — 목록·상세·시청 설정은 공개. 시작은 로그인 회원, 종료·수정·삭제는 소유자만(서비스에서 검사).
 export function createLiveRouter({ service, iceServers }) {
   const router = express.Router();
+  const json = express.json({ limit: '10kb' });
 
   router.get('/', (_req, res) => {
     res.json(service.list());
@@ -18,14 +18,24 @@ export function createLiveRouter({ service, iceServers }) {
     res.json(service.get(Number(req.params.id)));
   });
 
-  // { title } → 201 { live, streamKey }. 송출 키는 이 응답에서 한 번만 내려간다.
-  router.post('/', express.json({ limit: '10kb' }), (req, res) => {
-    const { live, streamKey } = service.start({ title: req.body?.title });
-    res.status(201).location(`${req.baseUrl}/${live.id}`).json({ live, streamKey });
+  // { title } → 201 라이브 방송
+  router.post('/', json, (req, res) => {
+    const live = service.start({ title: req.body?.title }, req.member);
+    res.status(201).location(`${req.baseUrl}/${live.id}`).json(live);
   });
 
   router.post('/:id/end', (req, res) => {
-    res.json(service.end(Number(req.params.id), req.get('X-Stream-Key')));
+    res.json(service.end(Number(req.params.id), req.member));
+  });
+
+  // { title }
+  router.patch('/:id', json, (req, res) => {
+    res.json(service.rename(Number(req.params.id), req.body?.title, req.member));
+  });
+
+  router.delete('/:id', (req, res) => {
+    service.remove(Number(req.params.id), req.member);
+    res.status(204).end();
   });
 
   return router;

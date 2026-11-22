@@ -22,6 +22,34 @@ const MIGRATIONS = [
      started_at TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
      ended_at   TEXT
    )`,
+  // 3: 회원·로그인 세션, 방송 소유자, 댓글
+  //    이전 단계에서 만든 방송은 owner_id 가 NULL(소유자 없음)로 남는다.
+  `CREATE TABLE members (
+     id            INTEGER PRIMARY KEY AUTOINCREMENT,
+     username      TEXT    NOT NULL UNIQUE,
+     nickname      TEXT    NOT NULL UNIQUE,
+     password_hash TEXT    NOT NULL,
+     created_at    TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+   );
+   CREATE TABLE sessions (
+     token_hash TEXT    PRIMARY KEY,
+     member_id  INTEGER NOT NULL REFERENCES members(id) ON DELETE CASCADE,
+     created_at TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+     expires_at TEXT    NOT NULL
+   );
+   ALTER TABLE broadcasts ADD COLUMN owner_id INTEGER REFERENCES members(id);
+   ALTER TABLE live_broadcasts ADD COLUMN owner_id INTEGER REFERENCES members(id);
+   CREATE UNIQUE INDEX one_live_per_owner ON live_broadcasts(owner_id) WHERE status = 'live';
+   CREATE TABLE comments (
+     id          INTEGER PRIMARY KEY AUTOINCREMENT,
+     target_type TEXT    NOT NULL CHECK (target_type IN ('broadcast', 'live')),
+     target_id   INTEGER NOT NULL,
+     author_id   INTEGER NOT NULL REFERENCES members(id),
+     body        TEXT    NOT NULL,
+     created_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+     updated_at  TEXT
+   );
+   CREATE INDEX comments_by_target ON comments(target_type, target_id, id)`,
 ];
 
 export function openDatabase(dbPath) {

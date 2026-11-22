@@ -165,3 +165,46 @@ progress { width: 100%; }
   .topbar nav { font-size: 0.9rem; }
   .button { padding: 8px 12px; }
 }
+
+/* 로그인 상태 */
+.auth-area { display: inline-flex; align-items: center; gap: 10px; }
+.me { font-weight: 600; }
+button.link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.hint { color: var(--muted); font-weight: 400; font-size: 0.85rem; }
+input[type=password] {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+/* 소유자 관리 */
+.owner-tools { margin: 16px 0; padding: 12px 16px; border: 1px dashed var(--border); border-radius: 12px; }
+.owner-tools form { margin-top: 8px; }
+
+/* 댓글 */
+.comments { margin-top: 32px; }
+.comments h2 { font-size: 1.15rem; margin: 0 0 8px; }
+.comments > form { display: flex; gap: 8px; align-items: flex-end; margin-top: 8px; }
+.comments > form textarea { flex: 1; }
+.comment-list { list-style: none; padding: 0; margin: 16px 0 0; display: grid; gap: 12px; }
+.comment { padding: 10px 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
+.comment-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; font-size: 0.9rem; }
+.comment-actions { margin-left: auto; display: inline-flex; gap: 10px; font-size: 0.85rem; }
+.comment-body { margin: 6px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.comment form { margin-top: 8px; gap: 8px; }
+
+@media (max-width: 480px) {
+  .comments > form { flex-direction: column; align-items: stretch; }
+}

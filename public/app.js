@@ -1,14 +1,22 @@
 // 해시 라우팅 SPA
-//   #/                  방송 목록 (라이브 방송 + 녹화방송)
-//   #/new               녹화방송 등록
-//   #/broadcasts/:id    녹화방송 상세·재생
-//   #/live/new          라이브 송출 (휴대폰)
-//   #/lives/:id         라이브 시청
-import { api, mount, q, showError, formatDate, formatSize } from './common.js';
+//   #/                  방송 목록 (라이브 방송 + 녹화방송)          공개
+//   #/login, #/signup   로그인·회원가입 (?next=돌아갈 화면)
+//   #/new               녹화방송 등록                               로그인 필요
+//   #/broadcasts/:id    녹화방송 상세·재생·댓글                      공개 (관리는 소유자)
+//   #/live/new          라이브 송출 (휴대폰)                         로그인 필요
+//   #/lives/:id         라이브 시청·댓글                             공개 (관리는 소유자)
+import {
+  api, mount, q, showError, formatDate, formatSize, refreshSession, renderAuthArea, showLoginRequired, ownerName,
+} from './common.js';
+import { renderLogin, renderSignup } from './auth.js';
 import { renderGoLive, renderWatchLive } from './live.js';
+import { mountComments } from './comments.js';
+import { mountOwnerTools } from './owner-tools.js';
 
 const routes = [
   [/^#?\/?$/, renderList],
+  [/^#\/login$/, renderLogin],
+  [/^#\/signup$/, renderSignup],
   [/^#\/new$/, renderNew],
   [/^#\/broadcasts\/(\d+)$/, (id) => renderDetail(id)],
   [/^#\/live\/new$/, renderGoLive],
@@ -22,10 +30,11 @@ function route() {
   leaveCurrent?.();
   leaveCurrent = null;
   const onLeave = (fn) => { leaveCurrent = fn; };
+  renderAuthArea(); // 헤더의 로그인 링크가 지금 화면으로 돌아오도록
 
-  const hash = location.hash || '#/';
+  const path = (location.hash || '#/').split('?')[0];
   for (const [pattern, render] of routes) {
-    const match = hash.match(pattern);
+    const match = path.match(pattern);
     if (match) return render(...match.slice(1), onLeave);
   }
   mount('tpl-list').replaceChildren(
@@ -34,6 +43,7 @@ function route() {
 }
 
 window.addEventListener('hashchange', route);
+await refreshSession();
 route();
 
 function renderList(onLeave) {
@@ -53,14 +63,14 @@ async function loadLives(root) {
     const onAir = lives.filter((l) => l.status === 'live').length;
     status.className = 'muted';
     status.textContent = lives.length === 0
-      ? '아직 라이브 방송이 없습니다. 휴대폰에서 "● 라이브 시작"을 눌러 보세요.'
+      ? '아직 라이브 방송이 없습니다. 로그인한 뒤 휴대폰에서 "● 라이브 시작"을 눌러 보세요.'
       : `방송 중 ${onAir}개 · 종료 ${lives.length - onAir}개`;
     list.replaceChildren(...lives.map((live) => card({
       href: `#/lives/${live.id}`,
       title: live.title,
-      date: live.status === 'live'
+      date: `${ownerName(live)} · ${live.status === 'live'
         ? `${formatDate(live.startedAt)} 시작`
-        : `${formatDate(live.endedAt ?? live.startedAt)} 종료`,
+        : `${formatDate(live.endedAt ?? live.startedAt)} 종료`}`,
       badge: live.status === 'live' ? '● 방송 중' : '종료',
       variant: live.status === 'live' ? 'on-air' : 'ended',
     })));
@@ -84,7 +94,7 @@ async function loadBroadcasts(root) {
     list.replaceChildren(...broadcasts.map((b) => card({
       href: `#/broadcasts/${b.id}`,
       title: b.title,
-      date: formatDate(b.createdAt),
+      date: `${ownerName(b)} · ${formatDate(b.createdAt)}`,
       badge: b.sourceType === 'upload' ? '업로드' : 'URL',
     })));
   } catch (err) {
@@ -107,30 +117,54 @@ async function renderDetail(id) {
   const root = mount('tpl-detail');
   const status = q(root, 'status');
 
+  let b;
   try {
-    const b = await api(`/api/broadcasts/${id}`);
-    document.title = `${b.title} - 치지직`;
-    q(root, 'title').textContent = b.title;
-    q(root, 'meta').textContent = [
-      formatDate(b.createdAt),
-      b.sourceType === 'upload' ? `업로드 파일 · ${formatSize(b.fileSize)}` : '외부 영상 URL',
-    ].join(' · ');
-    q(root, 'description').textContent = b.description;
-    q(root, 'location').textContent = b.sourceType === 'upload' ? `uploads/${b.videoLocation}` : b.videoLocation;
-
-    const player = q(root, 'player');
-    player.addEventListener('error', () => { q(root, 'player-error').hidden = false; });
-    player.src = b.videoSrc;
-
-    status.hidden = true;
-    q(root, 'article').hidden = false;
+    b = await api(`/api/broadcasts/${id}`);
   } catch (err) {
     status.textContent = err.message;
     status.className = 'error';
+    return;
   }
+
+  const showInfo = () => {
+    document.title = `${b.title} - 치지직`;
+    q(root, 'title').textContent = b.title;
+    q(root, 'description').textContent = b.description;
+  };
+  showInfo();
+  q(root, 'meta').textContent = [
+    ownerName(b),
+    formatDate(b.createdAt),
+    b.sourceType === 'upload' ? `업로드 파일 · ${formatSize(b.fileSize)}` : '외부 영상 URL',
+  ].join(' · ');
+  q(root, 'location').textContent = b.sourceType === 'upload' ? `uploads/${b.videoLocation}` : b.videoLocation;
+
+  const player = q(root, 'player');
+  player.addEventListener('error', () => { q(root, 'player-error').hidden = false; });
+  player.src = b.videoSrc;
+
+  mountOwnerTools(q(root, 'owner-tools'), {
+    resource: b,
+    withDescription: true,
+    deleteConfirm: '이 녹화방송을 삭제할까요? 영상 파일과 댓글도 함께 지워지며 되돌릴 수 없습니다.',
+    onSave: async ({ title, description }) => {
+      b = await api(`/api/broadcasts/${b.id}`, { method: 'PATCH', json: { title, description } });
+      showInfo();
+    },
+    onDelete: async () => {
+      await api(`/api/broadcasts/${b.id}`, { method: 'DELETE' });
+      location.hash = '#/';
+    },
+  });
+  mountComments(q(root, 'comments'), { targetType: 'broadcast', targetId: b.id });
+
+  status.hidden = true;
+  q(root, 'article').hidden = false;
 }
 
 function renderNew() {
+  if (showLoginRequired('녹화방송 등록')) return;
+
   const root = mount('tpl-new');
   const form = q(root, 'form');
   const errorBox = q(root, 'error');
@@ -179,7 +213,7 @@ function renderNew() {
   });
 }
 
-// fetch 는 업로드 진행률을 주지 않으므로 XHR 사용
+// fetch 는 업로드 진행률을 주지 않으므로 XHR 사용 (세션 쿠키는 같은 출처라 자동으로 실린다)
 function uploadWithProgress(body, onProgress) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();

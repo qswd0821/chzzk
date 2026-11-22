@@ -1,21 +1,30 @@
 import { WebSocketServer } from 'ws';
 import { LiveStatus } from './live.service.js';
+import { isSameOrigin } from '../auth/session-cookie.js';
 
 export const SIGNALING_PATH = '/ws/lives';
 
-// WebRTC 시그널링 중계. 영상은 송출자 ↔ 시청자 브라우저가 P2P로 직접 주고받고(docs/adr/0001),
-// 서버는 연결 협상 메시지(offer/answer/ice)만 전달한다.
+// WebRTC 시그널링 중계 + 라이브 댓글 실시간 전달.
+// 영상은 송출자 ↔ 시청자 브라우저가 P2P로 직접 주고받고(docs/adr/0001),
+// 서버는 연결 협상 메시지(offer/answer/ice)와 댓글 변경 알림만 전달한다.
 //
-// 첫 메시지로 참여한다:
-//   송출자 → { type: 'join', role: 'broadcaster', liveId, streamKey }
-//   시청자 → { type: 'join', role: 'viewer', liveId }
+// 연결할 때 로그인 쿠키로 회원을 확인하고(authenticate), 첫 메시지로 참여한다:
+//   송출자 → { type: 'join', role: 'broadcaster', liveId }   로그인한 소유자만 허용
+//   시청자 → { type: 'join', role: 'viewer', liveId }        누구나(비로그인 포함)
 // 이후:
 //   송출자 → { type: 'offer' | 'ice', to: viewerId, sdp | candidate }   → 해당 시청자에게 전달
 //   시청자 → { type: 'answer' | 'ice', sdp | candidate }                → 송출자에게 { from: viewerId, ... }
 //   서버 → 송출자 { type: 'viewer-joined' | 'viewer-left', viewerId }
+//   서버 → 모두   { type: 'comment', action: 'created' | 'updated' | 'deleted', comment }
 //   서버 → 모두   { type: 'ended' }  라이브 방송이 종료되면 보내고 연결을 닫는다.
-export function attachLiveSignaling({ server, service, heartbeatMs = 15_000 }) {
-  const wss = new WebSocketServer({ server, path: SIGNALING_PATH, maxPayload: 64 * 1024 });
+export function attachLiveSignaling({ server, service, comments, authenticate, heartbeatMs = 15_000 }) {
+  const wss = new WebSocketServer({
+    server,
+    path: SIGNALING_PATH,
+    maxPayload: 64 * 1024,
+    // 다른 사이트의 페이지가 로그인한 회원의 브라우저로 송출 연결을 여는 것을 막는다.
+    verifyClient: ({ req }) => isSameOrigin(req),
+  });
   const rooms = new Map(); // liveId → { broadcaster, viewers: Map<viewerId, socket> }
   let nextViewerId = 1;
 
@@ -24,21 +33,30 @@ export function attachLiveSignaling({ server, service, heartbeatMs = 15_000 }) {
     return rooms.get(liveId);
   };
 
+  const everyoneIn = (room) => [room.broadcaster, ...room.viewers.values()].filter(Boolean);
+
   service.events.on('ended', (liveId) => {
     const room = rooms.get(liveId);
     if (!room) return;
     rooms.delete(liveId);
-    for (const socket of [room.broadcaster, ...room.viewers.values()]) {
-      if (!socket) continue;
+    for (const socket of everyoneIn(room)) {
       send(socket, { type: 'ended' });
       socket.close(1000, 'ended');
     }
   });
 
-  wss.on('connection', (socket) => {
+  comments.events.on('changed', ({ action, comment }) => {
+    if (comment.targetType !== 'live') return;
+    const room = rooms.get(comment.targetId);
+    if (!room) return;
+    for (const socket of everyoneIn(room)) send(socket, { type: 'comment', action, comment });
+  });
+
+  wss.on('connection', (socket, req) => {
     socket.isAlive = true;
     socket.on('pong', () => { socket.isAlive = true; });
 
+    const member = authenticate(req);
     let session = null; // { role, liveId, viewerId? }
 
     socket.on('message', (raw) => {
@@ -47,7 +65,7 @@ export function attachLiveSignaling({ server, service, heartbeatMs = 15_000 }) {
 
       if (!session) {
         if (message.type !== 'join') return reject(socket, '먼저 방송에 참여해야 합니다.');
-        session = join(socket, message);
+        session = join(socket, message, member);
         return;
       }
 
@@ -80,7 +98,7 @@ export function attachLiveSignaling({ server, service, heartbeatMs = 15_000 }) {
     });
   });
 
-  function join(socket, { role, liveId, streamKey }) {
+  function join(socket, { role, liveId }, member) {
     const id = Number(liveId);
     let live;
     try {
@@ -98,8 +116,12 @@ export function attachLiveSignaling({ server, service, heartbeatMs = 15_000 }) {
     const room = roomOf(id);
 
     if (role === 'broadcaster') {
-      if (!service.isValidStreamKey(id, streamKey)) {
-        reject(socket, '송출 키가 올바르지 않습니다.');
+      if (!member) {
+        reject(socket, '로그인이 필요합니다.');
+        return null;
+      }
+      if (!service.canBroadcast(id, member)) {
+        reject(socket, '방송 소유자만 송출할 수 있습니다.');
         return null;
       }
       if (room.broadcaster) {

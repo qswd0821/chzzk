@@ -1,13 +1,17 @@
 // 라이브 방송: 송출(휴대폰 카메라·마이크 → WebRTC)과 시청.
 // 영상은 송출자 브라우저가 시청자마다 RTCPeerConnection 을 맺어 직접 보내고,
-// 서버(/ws/lives)는 연결 협상 메시지만 전달한다. (docs/adr/0001-webrtc-p2p-live-broadcast.md)
-import { api, mount, q, showError, formatDate } from './common.js';
+// 서버(/ws/lives)는 연결 협상 메시지와 라이브 댓글 변경만 전달한다. (docs/adr/0001-webrtc-p2p-live-broadcast.md)
+// 송출은 로그인한 소유자만 할 수 있고, 서버가 세션 쿠키로 확인한다.
+import { api, mount, q, showError, formatDate, showLoginRequired, ownerName, isMine } from './common.js';
+import { mountComments } from './comments.js';
+import { mountOwnerTools } from './owner-tools.js';
 
 const signalingUrl = () => `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/lives`;
 
 // ───────────────────────── 송출 ─────────────────────────
 
 export function renderGoLive(onLeave) {
+  if (showLoginRequired('라이브 송출')) return;
   const root = mount('tpl-go-live');
   const preview = q(root, 'preview');
   const cameraBtn = q(root, 'camera');
@@ -27,7 +31,8 @@ export function renderGoLive(onLeave) {
 
   let stream = null;
   let facingMode = 'user';
-  let session = null; // 송출 중일 때의 { live, streamKey, socket, peers }
+  let session = null; // 송출 중일 때의 { live, socket, peers }
+  let liveComments = null;
 
   async function openCamera() {
     errorBox.hidden = true;
@@ -74,15 +79,12 @@ export function renderGoLive(onLeave) {
 
     startBtn.disabled = true;
     try {
-      const [{ live, streamKey }, rtcConfig] = await Promise.all([
-        api('/api/lives', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ title }),
-        }),
+      const [live, rtcConfig] = await Promise.all([
+        api('/api/lives', { method: 'POST', json: { title } }),
         api('/api/lives/rtc-config'),
       ]);
-      session = startBroadcast({ live, streamKey, rtcConfig });
+      session = startBroadcast({ live, rtcConfig });
+      liveComments = mountComments(q(root, 'comments'), { targetType: 'live', targetId: live.id });
       form.hidden = true;
       q(root, 'controls').hidden = false;
       q(root, 'on-air').hidden = false;
@@ -97,23 +99,23 @@ export function renderGoLive(onLeave) {
   endBtn.addEventListener('click', async () => {
     if (!session) return;
     endBtn.disabled = true;
-    const { live, streamKey } = session;
+    const { live } = session;
     try {
-      await api(`/api/lives/${live.id}/end`, { method: 'POST', headers: { 'X-Stream-Key': streamKey } });
+      await api(`/api/lives/${live.id}/end`, { method: 'POST' });
     } catch {
       // 이미 종료되었더라도 화면은 정리한다.
     }
     finish('송출을 종료했습니다. 방송 목록에 "종료"로 표시됩니다.');
   });
 
-  function startBroadcast({ live, streamKey, rtcConfig }) {
+  function startBroadcast({ live, rtcConfig }) {
     const socket = new WebSocket(signalingUrl());
     const peers = new Map(); // viewerId → RTCPeerConnection
     const pending = new Map(); // viewerId → answer 전에 도착한 ICE 후보
     const updateViewers = () => { q(root, 'viewers').textContent = `시청자 ${peers.size}명`; };
 
     socket.addEventListener('open', () => {
-      socket.send(JSON.stringify({ type: 'join', role: 'broadcaster', liveId: live.id, streamKey }));
+      socket.send(JSON.stringify({ type: 'join', role: 'broadcaster', liveId: live.id }));
     });
 
     socket.addEventListener('message', async (event) => {
@@ -145,6 +147,8 @@ export function renderGoLive(onLeave) {
         peers.delete(msg.viewerId);
         pending.delete(msg.viewerId);
         updateViewers();
+      } else if (msg.type === 'comment') {
+        liveComments?.apply(msg.action, msg.comment);
       } else if (msg.type === 'ended') {
         finish('방송이 종료되었습니다.');
       } else if (msg.type === 'error') {
@@ -157,7 +161,7 @@ export function renderGoLive(onLeave) {
       if (session) finish('서버와 연결이 끊겨 방송이 종료되었습니다.');
     });
 
-    return { live, streamKey, socket, peers };
+    return { live, socket, peers };
   }
 
   function finish(text) {
@@ -222,6 +226,7 @@ export async function renderWatchLive(id, onLeave) {
   });
 
   const showEnded = (text = '종료된 방송입니다.') => {
+    q(root, 'end').hidden = true;
     badge.textContent = '종료';
     badge.className = 'live-badge ended';
     message.textContent = text;
@@ -238,13 +243,45 @@ export async function renderWatchLive(id, onLeave) {
     return;
   }
 
-  document.title = `${live.title} - 치지직`;
-  q(root, 'title').textContent = live.title;
-  q(root, 'meta').textContent = live.status === 'live'
-    ? `${formatDate(live.startedAt)} 시작`
-    : `${formatDate(live.startedAt)} 시작 · ${formatDate(live.endedAt ?? live.startedAt)} 종료`;
+  const showInfo = () => {
+    document.title = `${live.title} - 치지직`;
+    q(root, 'title').textContent = live.title;
+    q(root, 'meta').textContent = live.status === 'live'
+      ? `${ownerName(live)} · ${formatDate(live.startedAt)} 시작`
+      : `${ownerName(live)} · ${formatDate(live.startedAt)} 시작 · ${formatDate(live.endedAt ?? live.startedAt)} 종료`;
+  };
+  showInfo();
   status.hidden = true;
   q(root, 'article').hidden = false;
+
+  // 소유자에게만 제목 수정·삭제·종료 버튼을 보여준다(서버도 소유자인지 다시 검사한다).
+  mountOwnerTools(q(root, 'owner-tools'), {
+    resource: live,
+    withDescription: false,
+    deleteConfirm: '이 라이브 방송을 삭제할까요? 방송 중이면 종료되고, 댓글도 함께 지워집니다.',
+    onSave: async ({ title }) => {
+      live = await api(`/api/lives/${live.id}`, { method: 'PATCH', json: { title } });
+      showInfo();
+    },
+    onDelete: async () => {
+      await api(`/api/lives/${live.id}`, { method: 'DELETE' });
+      location.hash = '#/';
+    },
+  });
+  const endBtn = q(root, 'end');
+  if (isMine(live) && live.status === 'live') {
+    endBtn.hidden = false;
+    endBtn.addEventListener('click', async () => {
+      endBtn.disabled = true;
+      try {
+        await api(`/api/lives/${live.id}/end`, { method: 'POST' });
+      } catch (err) {
+        endBtn.disabled = false;
+        message.textContent = err.message;
+      }
+    });
+  }
+  const liveComments = mountComments(q(root, 'comments'), { targetType: 'live', targetId: live.id });
 
   const unmute = q(root, 'unmute');
   unmute.addEventListener('click', () => {
@@ -298,6 +335,8 @@ export async function renderWatchLive(id, onLeave) {
     } else if (msg.type === 'ice') {
       if (pc?.remoteDescription) await pc.addIceCandidate(msg.candidate);
       else pendingCandidates.push(msg.candidate);
+    } else if (msg.type === 'comment') {
+      liveComments.apply(msg.action, msg.comment);
     } else if (msg.type === 'ended') {
       unmute.hidden = true;
       showEnded('방송이 종료되었습니다.');

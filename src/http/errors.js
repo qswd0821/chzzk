@@ -7,7 +7,10 @@ export class HttpError extends Error {
 }
 
 export const badRequest = (message) => new HttpError(400, message);
+export const unauthorized = (message = '로그인이 필요합니다.') => new HttpError(401, message);
+export const forbidden = (message) => new HttpError(403, message);
 export const notFound = (message) => new HttpError(404, message);
+export const conflict = (message) => new HttpError(409, message);
 
 export function apiNotFoundHandler(_req, res) {
   res.status(404).json({ error: '존재하지 않는 API입니다.' });
