@@ -7,6 +7,7 @@
 - **인증·인가와 댓글** (3단계): 회원가입·로그인·로그아웃, 방송 소유자만 할 수 있는 수정·삭제·송출 제어, 녹화방송과 라이브 방송의 댓글(라이브는 실시간), 작성자만 할 수 있는 댓글 수정·삭제. **모든 권한은 서버가 검사합니다.**
 - **후원** (4단계): 로그인한 회원이 방송을 보며 그 방송의 소유자에게 금액을 정해 후원합니다. **토스페이먼츠 테스트 모드**(키가 없으면 내장 모의 결제 서비스)로 결제하고, **서버가 결제 승인과 금액·받는 소유자를 확인한 뒤에만** 확정합니다. 같은 승인 통지가 반복돼도 한 번만 적립되며, 방송별 후원 내역과 합계를 보여줍니다(라이브는 실시간 알림).
 - **로컬 오토스케일** (5단계): 서버를 컨테이너 이미지로 만들어 로컬 Kubernetes(k3d = Docker 안의 k3s)에서 **여러 인스턴스**로 띄우고, **HPA가 CPU 사용률에 따라 2~5개 사이에서 자동으로 늘리고 줄입니다.** Traefik 인그레스 → Service 가 요청을 나누고, 상태는 인스턴스 밖(공유 볼륨의 SQLite·업로드, Redis)에 두어 인스턴스가 바뀌어도 로그인·방송·라이브·댓글·후원이 그대로입니다. k6 부하 Job 과 [실측 결과](#실측-결과-2026-11-22)를 함께 둡니다.
+- **도메인·OCI 배포와 데스크톱 클라이언트** (6단계): 구매한 도메인 + **OCI Always Free VM** 에 Docker Compose(앱 + Caddy 자동 HTTPS)로 배포하고, **Windows·macOS 데스크톱 앱**(Electron)을 GitHub Actions 로 빌드해 `/download` 페이지에서 내려받게 합니다. 앱은 배포된 백엔드의 방송 목록을 보고 녹화방송·라이브를 재생합니다. → [6단계: 도메인·OCI 배포와 데스크톱 클라이언트](#6단계-도메인oci-배포와-데스크톱-클라이언트)
 
 기술 구성:
 
@@ -114,6 +115,10 @@ npm test
 | `TOSS_CLIENT_KEY` | (비움) | 토스페이먼츠 **API 개별 연동** 테스트 클라이언트 키(`test_ck_…`). 브라우저 결제창에 쓰는 공개 키 |
 | `REDIS_URL` | (비움) | 여러 인스턴스용 Redis(예: `redis://redis:6379`). 비우면 단일 인스턴스용 메모리 버스 |
 | `INSTANCE_ID` | 호스트 이름 | 응답 헤더 `X-Instance`·`/healthz` 에 표시할 인스턴스 이름. k8s 에서는 파드 이름 |
+| `PUBLIC_URL` | (비움) | 배포 공개 주소(예: `https://chzzk.example.com`). 다운로드 페이지 안내에 표시 |
+| `ALLOWED_ORIGINS` | `app://chzzk` | 공개 조회 API(GET)·시청자 WebSocket 을 허용할 다른 출처(데스크톱 앱). 쿠키는 허용하지 않음 |
+| `DOWNLOAD_BASE_URL` | GitHub Releases 최신 | 데스크톱 앱 설치 파일 위치 |
+| `TRUST_PROXY` | `loopback` | 리버스 프록시 뒤에서 HTTPS 를 판단할 신뢰 대상. Compose(Caddy) 에서는 `uniquelocal` → 세션 쿠키에 `Secure` |
 | `LIVE_RECONNECT_GRACE_SECONDS` | `20` | 송출자 연결이 끊긴 뒤 라이브를 종료하기까지 기다리는 시간(재접속 유예) |
 | `TOSS_SECRET_KEY` | (비움) | 토스페이먼츠 테스트 시크릿 키(`test_sk_…`). 서버에서 승인·조회 API 호출에만 쓰며 브라우저로 보내지 않습니다. `live_` 키는 서버가 거부합니다 |
 
@@ -194,6 +199,12 @@ k8s 에서는 위 값을 [k8s/app.yaml](k8s/app.yaml) 의 `env` 로 주고, 토�
 | **[5단계] 여러 인스턴스 앞 요청 분산** | [k8s/service.yaml](k8s/service.yaml) ClusterIP Service, [k8s/ingress.yaml](k8s/ingress.yaml) Traefik 인그레스(WebSocket 포함), 응답 헤더 `X-Instance` [src/app.js](src/app.js) | — |
 | **[5단계] 상태를 인스턴스 밖 공용 저장소에** | 공유 볼륨 [k8s/storage.yaml](k8s/storage.yaml) PVC → `/data/replay.db`(회원·세션·방송·라이브 상태·댓글·후원), `/data/uploads`(영상), 다중 프로세스 SQLite `busy_timeout`·`BEGIN IMMEDIATE` 마이그레이션 [src/database.js](src/database.js). Redis [k8s/redis.yaml](k8s/redis.yaml) + [src/realtime/bus.js](src/realtime/bus.js): 라이브 시그널링·댓글·후원·종료 알림 pub/sub, 송출자 접속 표시 TTL 키 [src/lives/live.signaling.js](src/lives/live.signaling.js), 재접속 유예·주기 점검 [src/lives/live.service.js](src/lives/live.service.js) | 송출·시청 화면 자동 재접속 [public/live.js](public/live.js) |
 | **[5단계] 부하 생성** | k6 스크립트 [k8s/load/k6-chzzk.js](k8s/load/k6-chzzk.js) + 클러스터 안 Job [k8s/load/k6-job.yaml](k8s/load/k6-job.yaml), 실행 도우미 [scripts/k3d.sh](scripts/k3d.sh) | — |
+| **[6단계] 기존 기능 + 상태 확인 경로** | 1~5단계 모듈 그대로, `GET /healthz`(DB·버스 확인, 인스턴스 이름) [src/app.js](src/app.js), Compose·Dockerfile 헬스체크 | 웹 화면 그대로 |
+| **[6단계] 도메인·DNS·HTTPS** | [deploy/Caddyfile](deploy/Caddyfile)(Let's Encrypt 자동 발급·갱신, HTTP→HTTPS, HSTS), [deploy/docker-compose.yml](deploy/docker-compose.yml) 80/443 공개, 도메인 기록은 아래 [도메인](#도메인과-https) | — |
+| **[6단계] OCI 배포 설정·재현 절차** | [deploy/cloud-init.yaml](deploy/cloud-init.yaml)(Docker·방화벽·클론), [deploy/.env.example](deploy/.env.example)(주소·비밀 값은 환경 설정), [scripts/deploy.sh](scripts/deploy.sh), 절차·VM 기록은 아래 [OCI VM](#oci-always-free-vm) | — |
+| **[6단계] 데스크톱 클라이언트** | 공개 조회만 허용 [src/http/cors.js](src/http/cors.js), 시청자 WebSocket 허용 [src/lives/live.signaling.js](src/lives/live.signaling.js) | [client/](client/) Electron: [main.js](client/main.js)(app:// 출처, 설정, `--smoke`), [renderer/app.js](client/renderer/app.js)(방송 목록·녹화 재생·라이브 WebRTC 시청·댓글·후원 내역) |
+| **[6단계] Windows·macOS 패키지 빌드** | [client/package.json](client/package.json) `build`(electron-builder: Windows x64 NSIS·zip, macOS arm64·x64 dmg·zip), [.github/workflows/client.yml](.github/workflows/client.yml)(Windows·macOS 러너 빌드 → 패키지 실행 확인 → Releases) | — |
+| **[6단계] 다운로드 페이지** | `GET /api/client/downloads` [src/client/client.router.js](src/client/client.router.js), `GET /download` | [public/download.html](public/download.html)·[download.js](public/download.js): OS별 링크·지원 아키텍처·설치·실행 방법 |
 | README | 이 문서 | — |
 
 ### 녹화방송 (1단계 + 3단계)
@@ -313,6 +324,142 @@ k8s 에서는 위 값을 [k8s/app.yaml](k8s/app.yaml) 의 `env` 로 주고, 토�
 2. `.env` 에 `TOSS_CLIENT_KEY`, `TOSS_SECRET_KEY` 를 넣고 `npm start`. 후원 영역에 "토스페이먼츠 테스트 결제창으로 이동합니다"가 보이면 토스 모드입니다.
 3. 후원하기 → 토스 테스트 결제창에서 결제수단을 고르고 진행하면 `/donation/success` 로 돌아와 서버가 승인 API를 호출합니다. 테스트 키라 **실제로 돈이 빠져나가지 않습니다.** 결제창을 닫으면 `PAY_PROCESS_CANCELED` 로 취소 화면이 나옵니다.
 4. 웹훅까지 확인하려면 서버를 공개 주소로 열어야 합니다(토스는 로컬 포트 주소를 웹훅으로 등록할 수 없음). 예: `ngrok http 3000` → 개발자센터 `웹훅` 메뉴에 `https://<ngrok 주소>/api/donations/webhook` 를 `PAYMENT_STATUS_CHANGED` 로 등록. 결제 승인 직후 토스가 보내는 웹훅이 리다이렉트 확정과 겹치는 **실제 중복 통지**가 되고, 응답은 `duplicate` 입니다. 웹훅 전송 기록은 개발자센터에서 볼 수 있습니다.
+
+## 6단계: 도메인·OCI 배포와 데스크톱 클라이언트
+
+> **진행 상태 (2026-11-22)**: 배포 설정·데스크톱 앱·빌드·다운로드 페이지는 완성했고 로컬과 CI 에서 확인했습니다. **도메인 구매와 OCI VM 생성은 아직입니다**(OCI 계정 로그인 복구 중). 아래 표의 *"배포 후 기입"* 칸은 실제로 만든 값으로 채운 뒤 다시 제출합니다. 지어낸 값은 넣지 않습니다.
+
+### 구성
+
+```text
+[Windows/macOS 앱]  [웹 브라우저·휴대폰]
+        │  https (공개 조회·시청자 WebSocket)        │  https (모든 기능)
+        ▼                                          ▼
+  DNS A 레코드  <도메인>  →  OCI VM 공인 IP
+                                   │ :80/:443
+                          ┌────────┴─────────┐
+                          │  Caddy (자동 HTTPS) │  ← Let's Encrypt 인증서 자동 발급·갱신
+                          └────────┬─────────┘
+                                   │ http://app:3000 (도커 내부망)
+                          ┌────────┴─────────┐
+                          │  치지직 앱 (Node)   │  /healthz, /download, API, WebSocket
+                          └────────┬─────────┘
+                                   │
+                         chzzk-data 볼륨 (SQLite·업로드)
+```
+
+설치 파일은 GitHub Releases 에 있고, `https://<도메인>/download` 페이지가 OS·아키텍처별로 연결합니다.
+
+### 도메인과 HTTPS
+
+| 항목 | 기록 |
+| --- | --- |
+| 등록 여부 | *배포 후 기입* (아직 구매 전) |
+| 도메인 | *배포 후 기입* |
+| 등록업체 | *배포 후 기입* (권장: Cloudflare Registrar — 원가 판매라 등록비와 갱신비가 같음) |
+| 최초 등록 비용 | *배포 후 기입* (실제 결제 금액) |
+| 갱신 비용(연) | *배포 후 기입* |
+| 공개 주소 | *배포 후 기입* — 서비스 `https://<도메인>`, 다운로드 `https://<도메인>/download`, 상태 `https://<도메인>/healthz` |
+
+**DNS 구성**
+1. 등록업체(또는 Cloudflare) DNS 에 **A 레코드**를 만듭니다: 이름 `@`(또는 `chzzk` 같은 하위 도메인), 값 = **OCI VM 공인 IPv4**, TTL 자동.
+2. Cloudflare DNS 라면 프록시를 끄고 **DNS only(회색 구름)** 로 둡니다. Caddy 가 직접 Let's Encrypt HTTP-01 인증을 받고, WebSocket 도 그대로 통과합니다.
+3. 확인: `nslookup <도메인>` 이 VM 공인 IP 를 돌려주면 됩니다.
+
+**TLS(HTTPS) 구성**
+- [deploy/Caddyfile](deploy/Caddyfile) 한 블록(`{$DOMAIN} { reverse_proxy app:3000 }`)으로 끝납니다. Caddy 가 처음 요청 때 **Let's Encrypt 인증서를 자동 발급**하고 만료 전 **자동 갱신**합니다. 인증서는 `caddy-data` 볼륨에 보관돼 재배포해도 유지됩니다.
+- `http://` 는 `https://` 로 308 리다이렉트, `Strict-Transport-Security` 헤더를 붙입니다. 앱은 `TRUST_PROXY=uniquelocal` 로 프록시의 `X-Forwarded-Proto` 를 믿어 세션 쿠키에 `Secure` 를 붙입니다.
+- 진짜 인증서라 **휴대폰 송출도 인증서 경고 없이** `https://<도메인>` 에서 됩니다.
+- 로컬 확인(이 저장소 그대로, `DOMAIN=localhost` → Caddy 내부 인증서): `http://localhost/healthz` → 308 `https://localhost/healthz`, `https://localhost/healthz` → 200 `{"status":"ok",…}`, HSTS 헤더, 가입 응답 쿠키 `HttpOnly; Secure; SameSite=Lax` 를 확인했습니다(2026-11-22).
+
+### OCI Always Free VM
+
+| 항목 | 기록 |
+| --- | --- |
+| 홈 리전 | *배포 후 기입* |
+| Shape | *배포 후 기입* (1순위 `VM.Standard.A1.Flex`) |
+| OCPU / 메모리 | *배포 후 기입* (1순위 2 OCPU / 12GB) |
+| 이미지 | Canonical Ubuntu 24.04 (A1 이면 aarch64) |
+| 부트 볼륨 | 50GB (Always Free 블록 스토리지 200GB 안) |
+| 공인 IP | *배포 후 기입* (예약 공인 IP 권장 — 재시작해도 바뀌지 않음) |
+
+**선택 기준(Always Free 범위)**
+- **1순위 `VM.Standard.A1.Flex` 2 OCPU · 12GB (ARM64)**: Oracle 공식 Always Free 기준 A1 은 계정 전체에서 **4 OCPU · 24GB** 까지 무료이므로, 다른 A1 인스턴스가 없을 때 그 절반을 이 서비스에 씁니다(다음 단계 K3s 에서 나머지를 남겨 둠). Node 앱·SQLite·이미지 빌드·향후 K3s 에 충분하고, 이 저장소의 이미지(`node:24-slim`)는 arm64 를 지원합니다.
+- **재고가 없을 때**("Out of host capacity"): 1 OCPU · 6GB A1 으로 재시도 → 다른 가용성 도메인(AD) 선택 → 시간대를 바꿔 재시도.
+- **그래도 안 되면 `VM.Standard.E2.1.Micro`(AMD, 1/8 OCPU · 1GB, Always Free 2대까지)**: 성능은 낮지만 무료입니다. cloud-init 이 메모리 2GB 미만이면 스왑 2GB 를 자동으로 만들어 이미지 빌드가 버티게 합니다. 실제로 고른 shape 와 이유를 위 표에 남깁니다.
+- A1·E2 Micro 모두 **홈 리전에서만** Always Free 입니다. 인스턴스 생성 전에 *Governance → Limits, Quotas and Usage* 에서 `Compute → Standard.A1 cores / memory` 잔여 한도를 확인합니다.
+
+**재현 절차 (콘솔)**
+1. OCI 콘솔 → *Compute → Instances → Create instance*.
+2. 이미지 *Canonical Ubuntu 24.04*, Shape *Ampere → VM.Standard.A1.Flex*, OCPU 2 · 메모리 12GB(위 대안 순서).
+3. 네트워킹: 새 VCN·**공용 서브넷**, *Assign a public IPv4 address* 체크.
+4. SSH 키: *Generate a key pair* 로 개인키를 내려받거나 내 공개키를 붙여 넣습니다(개인키는 저장소에 넣지 않습니다).
+5. *Show advanced options → Management → Initialization script* 에 [deploy/cloud-init.yaml](deploy/cloud-init.yaml) 내용을 붙여 넣고 생성합니다. (Docker·Compose·git 설치, OS 방화벽 80/443 열기, `/opt/chzzk` 에 저장소 클론)
+6. VCN 보안 목록(*Networking → VCN → Security Lists → Default*)에 **Ingress 규칙 추가**: 소스 `0.0.0.0/0`, TCP **80**, TCP **443**, UDP **443**(HTTP/3). 22 는 기본으로 열려 있습니다.
+7. 공인 IP 로 DNS A 레코드를 만듭니다(위 DNS 구성).
+8. 배포:
+
+   ```bash
+   ssh -i <개인키> ubuntu@<공인 IP>
+   ```
+
+   ```bash
+   nano /opt/chzzk/deploy/.env        # DOMAIN, PUBLIC_URL 을 구매한 도메인으로 (토스 테스트 키는 선택)
+   ```
+
+   ```bash
+   /opt/chzzk/scripts/deploy.sh       # git pull → docker compose up -d --build → https://<도메인>/healthz 확인
+   ```
+
+9. 다시 배포할 때는 `ssh … /opt/chzzk/scripts/deploy.sh` 한 줄입니다. 로그: `docker compose -f /opt/chzzk/deploy/docker-compose.yml logs -f app caddy`.
+
+비밀 값(토스 테스트 시크릿 키 등)은 VM 의 `deploy/.env` 에만 두고 커밋하지 않습니다(`.gitignore`).
+
+### 데스크톱 클라이언트 (Windows·macOS)
+
+- **기술**: Electron + electron-builder ([client/](client/)). 화면은 앱 전용 출처 `app://chzzk` 로 띄우고, 서버는 이 출처에 **공개 조회 API(GET)와 시청자 WebSocket 만** 허용합니다(쿠키 없음 → 쓰기 불가, 서버가 403).
+- **기능**: 방송 목록(라이브·녹화) → 녹화방송 재생(업로드·외부 URL) / 라이브 실시간 시청(WebRTC, 서버가 바뀌면 자동 재접속) / 댓글·후원 내역 보기(라이브는 실시간). 로그인·등록·송출·후원은 **"웹에서 열기"** 로 기본 브라우저에서 합니다. 오른쪽 위 **설정**에서 서버 주소를 바꿀 수 있습니다.
+- **기본 서버 주소**: 빌드 때 `client/app-config.json` 에 들어갑니다. CI 는 저장소 변수 `CHZZK_SERVER_URL`(도메인을 산 뒤 `https://<도메인>` 으로 설정)을 씁니다.
+- **자동 확인 모드**: `Chzzk --smoke --server=<주소> [--screenshot=<png>]` — 방송 목록을 받고 첫 녹화방송의 영상 메타데이터까지 불러와(실제 재생 준비) 결과 JSON 을 출력하고 종료합니다(성공 0).
+
+**빌드**
+
+| OS | 패키지 | 아키텍처 | 만드는 곳 |
+| --- | --- | --- | --- |
+| Windows 10·11 | `Chzzk-Setup-win-x64.exe`(NSIS 설치), `Chzzk-win-x64.zip`(무설치) | x64 | 로컬(Windows) 또는 GitHub Actions `windows-latest` |
+| macOS 12+ | `Chzzk-mac-arm64.dmg`·`.zip` | Apple Silicon | GitHub Actions `macos-latest` |
+| macOS 12+ | `Chzzk-mac-x64.dmg`·`.zip` | Intel | GitHub Actions `macos-latest` |
+
+```bash
+cd client && npm ci && npm run dist:win     # Windows 에서 로컬 빌드 → client/dist/
+```
+
+```bash
+git tag client-v1.0.0 && git push origin client-v1.0.0   # CI: Windows·macOS 빌드 → 패키지 실행 확인 → GitHub Releases
+```
+
+macOS 패키지는 macOS 에서만 만들 수 있어 GitHub Actions 의 macOS 러너를 씁니다. 코드 서명은 하지 않았습니다(비용) — Windows SmartScreen 은 *추가 정보 → 실행*, macOS 는 *우클릭 → 열기* 또는 `xattr -dr com.apple.quarantine /Applications/Chzzk.app`.
+
+**다운로드 페이지**: `https://<도메인>/download` ([public/download.html](public/download.html)) — OS별 파일 링크(`https://github.com/qswd0821/chzzk/releases/latest/download/<파일>`), 지원 아키텍처, 설치·실행 방법, 서명 경고 넘기는 법을 보여주고, 접속한 OS 를 추천합니다.
+
+### 직접 확인 절차 (외부 네트워크)
+
+1. **도메인·HTTPS**: 휴대폰 LTE 등 외부망에서 `https://<도메인>` → 자물쇠(유효한 인증서), `http://<도메인>` → https 로 이동, `https://<도메인>/healthz` → `{"status":"ok"}`.
+2. **기존 기능**: 가입·로그인 → 녹화방송 등록·재생 → 댓글 → 후원(모의 결제) → 휴대폰에서 라이브 송출·다른 화면 시청.
+3. **다운로드**: `https://<도메인>/download` 에서 내 OS 파일을 내려받습니다.
+4. **Windows**: `Chzzk-Setup-win-x64.exe` 실행 → (SmartScreen: 추가 정보 → 실행) → 설치 → "치지직" 실행 → 오른쪽 위 서버 주소가 `https://<도메인>` 인지 확인 → 방송 목록 표시 → 녹화방송 클릭 → 재생, ● 방송 중 라이브 클릭 → 시청.
+5. **macOS**: 칩에 맞는 `.dmg` → 응용 프로그램으로 복사 → 우클릭 → 열기 → 같은 방식으로 목록·재생 확인.
+6. 자동 확인(선택): `"C:\Users\<사용자>\AppData\Local\Programs\Chzzk\Chzzk.exe" --smoke` / `/Applications/Chzzk.app/Contents/MacOS/Chzzk --smoke` → `{"smoke":"pass",…}`.
+
+### 테스트 기록
+
+| OS · 아키텍처 | 패키지 | 대상 서버 | 방법 | 결과 |
+| --- | --- | --- | --- | --- |
+| Windows 11 Education · x64 | 로컬 빌드 `win-unpacked/Chzzk.exe` (설치 파일 121MB, zip 153MB 생성) | 로컬 백엔드 `http://localhost:3100` | `--smoke` | **통과** — 녹화방송 2개 목록, 첫 영상 메타데이터 로드(5초) `{"smoke":"pass","platform":"win32-x64",…}` (2026-11-22) |
+| Windows · x64 | GitHub Actions `windows-latest` 빌드 | CI 안 백엔드 | `--smoke` | **통과** — 녹화방송 목록 1개, 영상 메타데이터 로드(5초) `{"smoke":"pass","platform":"win32-x64",…}` ([CI 실행](https://github.com/qswd0821/chzzk/actions/runs/45034305677), 2026-11-22) |
+| macOS · arm64 | GitHub Actions `macos-latest` 빌드(arm64·x64 패키지 생성) | CI 안 백엔드 | `--smoke` (arm64 앱 실행) | **통과** — macOS 6개 패키지 중 arm64 앱 실행, 목록 1개·영상 메타데이터 로드(5초) `{"smoke":"pass","platform":"darwin-arm64",…}` ([CI 실행](https://github.com/qswd0821/chzzk/actions/runs/45034305677), 2026-11-22). x64(Intel) 패키지는 빌드만 확인 |
+| Windows · x64 | 공개 링크에서 받은 설치 파일 | `https://<도메인>` | 설치 후 목록·재생 | *배포 후 기입* |
+| macOS | 공개 링크에서 받은 dmg | `https://<도메인>` | 설치 후 목록·재생 | *배포 후 기입* (Mac 실기기가 없으면 "실기기 미확인"으로 남김) |
 
 ## 휴대폰 연결과 권한
 
@@ -524,7 +671,7 @@ default ✓ [ 100% ] 00/50 VUs  2m50s
 
 ### 자동 테스트
 
-`npm test` 는 임시 디렉터리에서 서버를 띄워 64개 시나리오를 확인합니다.
+`npm test` 는 임시 디렉터리에서 서버를 띄워 69개 시나리오를 확인합니다.
 
 - 인증([test/auth.test.js](test/auth.test.js)): 가입 즉시 로그인, HttpOnly·SameSite 쿠키, scrypt 해시 저장, 입력 검증·중복 409, 로그인 실패 메시지 동일, 로그아웃 후 같은 토큰 무효, 세션 토큰 해시 저장, 만료
 - 녹화방송([test/broadcasts.test.js](test/broadcasts.test.js)): 1단계 기능, 비로그인 등록 401(파일 미저장), 수정·삭제 401/403/200, 삭제 시 파일·댓글 정리, 다른 출처 요청 403, 재시작 후 유지, 이전 DB 마이그레이션·소유자 없는 방송 관리 불가
@@ -533,6 +680,7 @@ default ✓ [ 100% ] 00/50 VUs  2m50s
 - 후원([test/donations.test.js](test/donations.test.js), 모의 결제): 공개 설정에 비밀 없음, 주문 401·자기 방송 403·소유자 없음·금액 범위·메시지 길이, 성공 확정과 내역·합계, **승인 재요청 3회·자동 웹훅·웹훅 재전송 5회·웹훅 직접 3회에도 1회 적립**, 위조 웹훅(없는 결제·READY 결제) 무시, 리다이렉트·결제창 금액 변조 거절, 남의 주문 401/403, 실패·취소 후 확정 불가, 30분 만료, 주문 후 방송 삭제 시 확정 거절, `order_id`·`payment_key` UNIQUE, 라이브 실시간 후원 알림 1회, 재시작 후 유지
 - 여러 인스턴스([test/multi-instance.test.js](test/multi-instance.test.js), 서버 2~3개가 같은 DB 파일·같은 버스 공유): `X-Instance`·`/healthz`, A 에서 만든 세션으로 B 로그인, A 에서 등록한 방송·업로드 영상·댓글·후원이 B 에서 보임, 두 인스턴스에 동시에 온 승인 요청도 1회 확정, 송출자 A·시청자 B 사이 시그널링·댓글·후원·종료 전달, 송출자 인스턴스가 1012 로 내려가도 다른 인스턴스로 재접속하면 유지, 새 인스턴스가 떠도 남의 라이브를 끝내지 않음
 - 라이브 재접속([test/lives.test.js](test/lives.test.js)): 유예 안 재접속 시 유지·돌아오지 않으면 종료, 새 화면 이어받기(4001), 재시작 후 주기 점검 종료
+- 데스크톱 클라이언트 출처([test/client.test.js](test/client.test.js)): `app://chzzk` 의 공개 GET 에만 CORS 허용(쿠키 불허)·다른 사이트 불허, 클라이언트 출처의 쓰기 403, 클라이언트 WebSocket 은 시청자만(소유자 쿠키를 실어도 송출 불가)·다른 사이트 거절, 다운로드 정보(OS·아키텍처 6개, Releases 최신 주소), `/download`·`/healthz`
 - 토스 어댑터([test/toss.test.js](test/toss.test.js), 가짜 토스 API 서버): 클라이언트 키만 공개·모의 결제 경로 닫힘, 승인 API 호출 형식(Basic 인증·저장된 금액), 웹훅 선도착 후 `ALREADY_PROCESSED_PAYMENT` 에도 1회 적립, 카드사 거절 시 실패 기록, `live_` 키 거부
 
 ## 디렉터리 구조
@@ -548,6 +696,8 @@ chzzk/
 │  │  ├─ errors.js              # HttpError(400/401/403/404/409), 공통 에러 응답
 │  │  └─ tls.js                 # HTTPS 인증서 로드/자체 서명 생성, LAN IP
 │  ├─ storage/video-storage.js  # 업로드 영상 저장·삭제·서빙(/media)
+│  ├─ http/cors.js              # 데스크톱 앱 출처에 공개 조회만 허용
+│  ├─ client/client.router.js   # 다운로드 정보 API
 │  ├─ realtime/bus.js           # 인스턴스 사이 메시지 버스(Redis 또는 메모리): pub/sub, TTL 접속 표시
 │  ├─ auth/                     # 인증·인가 (3단계)
 │  │  ├─ auth.router.js         # 가입·로그인·로그아웃·me
@@ -580,9 +730,10 @@ chzzk/
 │  ├─ owner-tools.js            # 소유자 수정·삭제 영역
 │  ├─ donations.js              # 후원 영역, 결제창 열기, 결제 결과 화면, 라이브 후원 알림
 │  ├─ mock-pay.html, mock-pay.js # 모의 결제창 (토스 키가 없을 때만)
+│  ├─ download.html, download.js # 데스크톱 앱 다운로드 페이지
 │  ├─ common.js                 # 공통 도우미, 로그인 상태
 │  └─ style.css
-├─ test/                        # node:test (auth, broadcasts, lives, comments, donations, toss, multi-instance)
+├─ test/                        # node:test (auth, broadcasts, lives, comments, donations, toss, multi-instance, client)
 ├─ Dockerfile, .dockerignore    # 서버 컨테이너 이미지 (5단계)
 ├─ k8s/                         # 로컬 Kubernetes (5단계)
 │  ├─ k3d-cluster.yaml          # k3d 클러스터(노드 1, 호스트 8080 → 인그레스)
@@ -594,6 +745,17 @@ chzzk/
 │  ├─ redis.yaml                # Redis (pub/sub, 송출자 접속 표시)
 │  └─ load/                     # k6 스크립트 + Job
 ├─ scripts/k3d.sh               # up / deploy / load / watch / status / down
+├─ deploy/                      # OCI VM 배포 (6단계)
+│  ├─ docker-compose.yml        # 앱 + Caddy(자동 HTTPS)
+│  ├─ Caddyfile                 # 도메인 TLS·리버스 프록시
+│  ├─ cloud-init.yaml           # VM 초기화(Docker·방화벽·클론·스왑)
+│  └─ .env.example              # 도메인·공개 주소·비밀 값 자리
+├─ scripts/deploy.sh            # VM 에서 배포 + HTTPS 상태 확인
+├─ client/                      # 데스크톱 앱 (Electron, 6단계)
+│  ├─ main.js, preload.js       # app:// 출처, 설정, --smoke
+│  ├─ renderer/                 # 방송 목록·재생·라이브 시청 화면
+│  └─ package.json              # electron-builder 설정 (Windows·macOS)
+├─ .github/workflows/client.yml # Windows·macOS 빌드 → 실행 확인 → Releases
 ├─ docs/adr/                    # 설계 결정 기록
 ├─ GLOSSARY.md                  # 도메인 용어
 ├─ data/                        # (실행 시 생성) replay.db, uploads/, tls/
