@@ -25,7 +25,10 @@ import { apiNotFoundHandler, errorHandler } from './http/errors.js';
 // 모든 요청은 loadMember 를 거쳐 req.member(로그인 회원 또는 null)를 갖고, 각 서비스가 그 회원으로 권한을 검사한다.
 // 공개 범위: 목록·시청·댓글·후원 내역 조회는 누구나, 등록·라이브 시작·댓글 작성·후원은 회원,
 //           관리·송출 제어는 소유자, 댓글 수정·삭제는 작성자.
-export function createApplication({ db, config, liveOptions = {} }) {
+//
+// 여러 인스턴스로 돌 수 있다(docs/adr/0003): 영속 상태는 db(공유 볼륨의 SQLite), 인스턴스 사이 실시간 상태는 bus(Redis).
+// 이 인스턴스의 메모리에는 자기에게 붙은 WebSocket 연결만 있다.
+export function createApplication({ db, config, bus, liveOptions = {} }) {
   const storage = createVideoStorage(config);
   const auth = createAuthService({ repository: createMemberRepository(db) });
 
@@ -33,7 +36,7 @@ export function createApplication({ db, config, liveOptions = {} }) {
   const findTarget = {};
   const comments = createCommentService({ repository: createCommentRepository(db), findTarget });
   const broadcasts = createBroadcastService({ repository: createBroadcastRepository(db), storage, comments });
-  const lives = createLiveService({ repository: createLiveRepository(db), comments, ...liveOptions });
+  const lives = createLiveService({ repository: createLiveRepository(db), comments, bus, ...liveOptions });
   findTarget[CommentTarget.BROADCAST] = (id) => broadcasts.get(id);
   findTarget[CommentTarget.LIVE] = (id) => lives.get(id);
 
@@ -42,9 +45,30 @@ export function createApplication({ db, config, liveOptions = {} }) {
   const donations = createDonationService({ repository: createDonationRepository(db), provider, findTarget });
   mockGateway?.onWebhook((body) => donations.handleWebhook(body));
 
+  // 요청을 처리한 인스턴스에서 생긴 알림을 모든 인스턴스의 라이브 연결로 보낸다.
+  comments.events.on('changed', (change) => { bus.publish('comment', change).catch(() => {}); });
+  donations.events.on('confirmed', (donation) => { bus.publish('donation', donation).catch(() => {}); });
+
   const app = express();
   app.disable('x-powered-by');
   app.set('trust proxy', 'loopback');
+
+  // 어느 인스턴스가 응답했는지(요청 분산 확인용)
+  app.use((_req, res, next) => {
+    res.set('X-Instance', config.instanceId);
+    next();
+  });
+
+  // k8s readiness·liveness 검사. DB(공유 볼륨)와 버스(Redis)에 닿는지 확인한다.
+  app.get('/healthz', async (_req, res) => {
+    try {
+      db.prepare('SELECT 1').get();
+      await bus.ping();
+      res.json({ status: 'ok', instance: config.instanceId, bus: bus.kind });
+    } catch (err) {
+      res.status(503).json({ status: 'error', instance: config.instanceId, error: err.message });
+    }
+  });
 
   app.use(loadMember(auth));
   app.use('/api', rejectCrossOrigin);
@@ -74,17 +98,26 @@ export function createApplication({ db, config, liveOptions = {} }) {
   return {
     app,
     paymentProvider: provider.name,
-    // HTTP(S) 서버에 라이브 방송 WebSocket(시그널링 + 라이브 댓글)을 붙인다.
-    attachTo(server) {
-      attachLiveSignaling({
+    // HTTP(S) 서버에 라이브 방송 WebSocket(시그널링 + 라이브 댓글·후원)을 붙이고,
+    // 송출자가 돌아오지 않은 라이브를 종료하는 주기 점검을 시작한다.
+    // 돌려주는 shutdown() 은 SIGTERM 때 연결을 1012 로 닫아 화면이 다른 인스턴스로 재접속하게 한다.
+    async attachTo(server) {
+      const signaling = await attachLiveSignaling({
         server,
         service: lives,
-        comments,
-        donations,
+        bus,
+        instanceId: config.instanceId,
         authenticate: (req) => auth.authenticate(readSessionToken(req)),
         ...liveOptions,
       });
-      return server;
+      const stopSweeper = lives.startSweeper();
+      return {
+        server,
+        shutdown() {
+          stopSweeper();
+          signaling.shutdown();
+        },
+      };
     },
   };
 }

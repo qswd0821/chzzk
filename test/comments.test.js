@@ -11,7 +11,7 @@ let broadcastId;
 let liveId;
 
 before(async () => {
-  t = await startTestServer({ liveOptions: { broadcasterConnectTimeoutMs: 60_000 } });
+  t = await startTestServer({ liveOptions: { connectWindowMs: 60_000 } });
   owner = await t.signup('vodowner');
   writer = await t.signup('writer');
   other = await t.signup('another');

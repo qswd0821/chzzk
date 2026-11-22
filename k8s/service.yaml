@@ -1,0 +1,13 @@
+# 여러 파드 앞에서 요청을 나눠 받는다(kube-proxy 가 준비된 파드들로 분산).
+# 로그인 세션이 공유 DB 에 있으므로 HTTP 요청은 아무 파드로 가도 된다(sticky 불필요).
+apiVersion: v1
+kind: Service
+metadata:
+  name: chzzk
+spec:
+  selector:
+    app: chzzk
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

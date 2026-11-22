@@ -6,6 +6,7 @@
 - **라이브 방송** (2단계): 휴대폰 브라우저에서 카메라·마이크로 라이브 방송을 시작·종료하고, 다른 화면에서 방송 목록 → 라이브 방송을 골라 실시간으로 시청합니다. 방송 중·종료 상태를 구분해 표시합니다.
 - **인증·인가와 댓글** (3단계): 회원가입·로그인·로그아웃, 방송 소유자만 할 수 있는 수정·삭제·송출 제어, 녹화방송과 라이브 방송의 댓글(라이브는 실시간), 작성자만 할 수 있는 댓글 수정·삭제. **모든 권한은 서버가 검사합니다.**
 - **후원** (4단계): 로그인한 회원이 방송을 보며 그 방송의 소유자에게 금액을 정해 후원합니다. **토스페이먼츠 테스트 모드**(키가 없으면 내장 모의 결제 서비스)로 결제하고, **서버가 결제 승인과 금액·받는 소유자를 확인한 뒤에만** 확정합니다. 같은 승인 통지가 반복돼도 한 번만 적립되며, 방송별 후원 내역과 합계를 보여줍니다(라이브는 실시간 알림).
+- **로컬 오토스케일** (5단계): 서버를 컨테이너 이미지로 만들어 로컬 Kubernetes(k3d = Docker 안의 k3s)에서 **여러 인스턴스**로 띄우고, **HPA가 CPU 사용률에 따라 2~5개 사이에서 자동으로 늘리고 줄입니다.** Traefik 인그레스 → Service 가 요청을 나누고, 상태는 인스턴스 밖(공유 볼륨의 SQLite·업로드, Redis)에 두어 인스턴스가 바뀌어도 로그인·방송·라이브·댓글·후원이 그대로입니다. k6 부하 Job 과 [실측 결과](#실측-결과-2026-11-22)를 함께 둡니다.
 
 기술 구성:
 
@@ -15,6 +16,7 @@
 - 결제: 토스페이먼츠 결제창(v2 SDK, API 개별 연동 테스트 키) + 승인 API·조회 API·웹훅. 키가 없으면 같은 흐름을 흉내 내는 내장 모의 결제 서비스 ([ADR 0002](docs/adr/0002-payment-provider-port-with-mock.md))
 - 화면: 빌드 단계 없는 정적 HTML/CSS/JS(해시 라우팅 SPA)
 - 라이브 송출: 브라우저 `getUserMedia`(카메라·마이크) + **WebRTC P2P**. 서버는 연결 협상 메시지만 중계합니다 ([ADR 0001](docs/adr/0001-webrtc-p2p-live-broadcast.md))
+- 여러 인스턴스(5단계): Docker 이미지([Dockerfile](Dockerfile)), k3d/k3s + HPA(autoscaling/v2) + Traefik 인그레스 + Service([k8s/](k8s/)), 공유 볼륨(PVC)의 SQLite·업로드, Redis pub/sub·TTL 키([ADR 0003](docs/adr/0003-shared-sqlite-volume-and-redis-bus.md)), 부하 생성 k6([k8s/load/](k8s/load/))
 - 용어: [GLOSSARY.md](GLOSSARY.md)
 
 ## 실행 방법
@@ -42,6 +44,52 @@ npm start
 
 개발 중에는 `npm run dev`(파일 변경 시 자동 재시작)를 쓸 수 있습니다.
 
+### 여러 인스턴스 + 오토스케일로 실행 (5단계, 로컬 Kubernetes)
+
+요구 사항: **Docker Desktop**(실행 중), **kubectl**, **k3d** v5 (`winget install k3d.k3d` / `brew install k3d`). 클라우드는 필요 없습니다.
+
+```bash
+scripts/k3d.sh up        # k3d 클러스터 생성 (노드 1개, 호스트 8080 → 인그레스)
+```
+
+```bash
+scripts/k3d.sh deploy    # docker build → k3d image import → kubectl apply -k k8s → 롤아웃 대기
+```
+
+브라우저에서 <http://localhost:8080> 을 엽니다(1~4단계 기능이 그대로 동작). 파드 2개로 시작합니다.
+
+```bash
+scripts/k3d.sh status    # HPA, 파드, kubectl top pods
+```
+
+```bash
+scripts/k3d.sh load      # k6 부하 Job 시작 (50 VU, 30초 증가 → 2분 유지 → 20초 감소)
+```
+
+```bash
+kubectl -n chzzk get hpa chzzk -w    # 또는 scripts/k3d.sh watch
+```
+
+```bash
+scripts/k3d.sh down      # 정리
+```
+
+PowerShell 에서는 스크립트 대신 같은 명령을 직접 실행합니다.
+
+```powershell
+k3d cluster create --config k8s/k3d-cluster.yaml
+docker build -t chzzk:local .
+k3d image import chzzk:local -c chzzk
+kubectl apply -k k8s
+kubectl -n chzzk rollout status deployment/chzzk
+kubectl apply -k k8s/load            # 부하 (다시 돌릴 땐 먼저: kubectl -n chzzk delete job chzzk-load)
+kubectl -n chzzk get hpa chzzk -w
+```
+
+PC 에서 직접 부하를 걸 수도 있습니다(인그레스 경유): `docker run --rm -i -e BASE_URL=http://host.docker.internal:8080 grafana/k6 run - < k8s/load/k6-chzzk.js`
+
+클러스터에서는 인그레스를 HTTP 로만 엽니다. 휴대폰 송출(카메라는 HTTPS 필요)은 `cloudflared tunnel --url http://localhost:8080` 또는 `ngrok http 8080` 이 주는 `https://…` 주소로 접속합니다. 단일 인스턴스 HTTPS 모드(`npm start` + `HTTPS=true`)는 그대로 쓸 수 있습니다.
+
 테스트:
 
 ```bash
@@ -64,6 +112,9 @@ npm test
 | `TURN_URL`, `TURN_USERNAME`, `TURN_CREDENTIAL` | (비움) | 휴대폰 LTE ↔ PC Wi-Fi 처럼 서로 다른 네트워크에서 연결이 안 될 때 쓰는 TURN 서버 |
 | `PAYMENT_PROVIDER` | `auto` | 후원 결제 서비스. `auto` = 토스 테스트 키가 둘 다 있으면 `toss`, 없으면 `mock`(내장 모의 결제). `toss` 로 고정하면 키가 없을 때 서버가 시작하지 않습니다 |
 | `TOSS_CLIENT_KEY` | (비움) | 토스페이먼츠 **API 개별 연동** 테스트 클라이언트 키(`test_ck_…`). 브라우저 결제창에 쓰는 공개 키 |
+| `REDIS_URL` | (비움) | 여러 인스턴스용 Redis(예: `redis://redis:6379`). 비우면 단일 인스턴스용 메모리 버스 |
+| `INSTANCE_ID` | 호스트 이름 | 응답 헤더 `X-Instance`·`/healthz` 에 표시할 인스턴스 이름. k8s 에서는 파드 이름 |
+| `LIVE_RECONNECT_GRACE_SECONDS` | `20` | 송출자 연결이 끊긴 뒤 라이브를 종료하기까지 기다리는 시간(재접속 유예) |
 | `TOSS_SECRET_KEY` | (비움) | 토스페이먼츠 테스트 시크릿 키(`test_sk_…`). 서버에서 승인·조회 API 호출에만 쓰며 브라우저로 보내지 않습니다. `live_` 키는 서버가 거부합니다 |
 
 ```dotenv
@@ -82,7 +133,13 @@ PAYMENT_PROVIDER=auto
 # 예시 형식입니다. 토스 개발자센터에서 받은 본인의 테스트 키를 넣으세요(커밋 금지).
 TOSS_CLIENT_KEY=test_ck_xxxxxxxxxxxxxxxxxxxxxxxx
 TOSS_SECRET_KEY=test_sk_xxxxxxxxxxxxxxxxxxxxxxxx
+# 여러 인스턴스(k8s/app.yaml 에서 설정하는 값)
+REDIS_URL=redis://redis:6379
+INSTANCE_ID=
+LIVE_RECONNECT_GRACE_SECONDS=20
 ```
+
+k8s 에서는 위 값을 [k8s/app.yaml](k8s/app.yaml) 의 `env` 로 주고, 토스 테스트 키는 Secret 으로 넣습니다(선택): `kubectl -n chzzk create secret generic chzzk-secrets --from-literal=TOSS_CLIENT_KEY=test_ck_… --from-literal=TOSS_SECRET_KEY=test_sk_…`
 
 ## 공개 범위와 권한
 
@@ -131,6 +188,12 @@ TOSS_SECRET_KEY=test_sk_xxxxxxxxxxxxxxxxxxxxxxxx
 | **서버에서 결제 승인·금액·수신 대상을 검증한 뒤 확정** | `POST /api/donations/confirm` — `donation.service.js` `confirm` → 결제 서비스 승인 API([toss.js](src/donations/providers/toss.js) `POST /v1/payments/confirm`) → `finalize`: `status=DONE`, 승인 금액 = 저장된 주문 금액, 주문번호 일치, 받는 회원 = 지금의 방송 소유자를 모두 확인한 뒤에만 확정 | 결과 화면 `/donation/success` — `renderDonationResult`: 서버가 확정했다고 응답한 뒤에만 "후원 완료" 표시 |
 | **같은 결제 건의 중복 확정 방지 코드와 저장 구조** | [src/database.js](src/database.js) 마이그레이션 4: `donations.order_id UNIQUE`, `donations.payment_key UNIQUE`, `CHECK (status <> 'done' OR payment_key IS NOT NULL)`. [donation.repository.js](src/donations/donation.repository.js) `markConfirmed`: `UPDATE … WHERE status = 'pending'` 조건부 갱신(한 번만 성공). 웹훅 `POST /api/donations/webhook` → `handleWebhook`: 결제 서비스에 다시 조회 후 같은 `finalize` → 이미 확정이면 `duplicate` | 결과 화면 새로고침 시 "이미 확정된 후원", 모의 결제의 "승인 통지 3번 다시 보내기" |
 | **방송별 후원 내역과 합계 조회·표시** | `GET /api/broadcasts/:id/donations`, `GET /api/lives/:id/donations` → `listFor` (확정된 후원만, `SUM`·`COUNT`), 라이브 새 확정 후원은 WebSocket `donation` 메시지 | 녹화방송 상세·라이브 시청·라이브 송출 화면의 후원 영역(합계, 후원자·금액·메시지·시각), 라이브 후원 알림 `showDonationToast` |
+| **[5단계] 서버 컨테이너 이미지** | [Dockerfile](Dockerfile) (node:24-slim 2단계 빌드, non-root, `HEALTHCHECK /healthz`), [.dockerignore](.dockerignore) | — |
+| **[5단계] 로컬 클러스터에서 여러 인스턴스 실행** | [k8s/k3d-cluster.yaml](k8s/k3d-cluster.yaml)(k3d 단일 노드), [k8s/app.yaml](k8s/app.yaml) Deployment `replicas: 2`, readiness/liveness `/healthz`, SIGTERM 시 WebSocket 1012 종료 [src/server.js](src/server.js), [k8s/kustomization.yaml](k8s/kustomization.yaml) | — |
+| **[5단계] 지표 기준 자동 스케일(최소·최대)** | [k8s/hpa.yaml](k8s/hpa.yaml) HPA autoscaling/v2: CPU 평균 50%, `minReplicas: 2`, `maxReplicas: 5`, 스케일 인 안정화 60초. 지표는 k3s 기본 metrics-server | — |
+| **[5단계] 여러 인스턴스 앞 요청 분산** | [k8s/service.yaml](k8s/service.yaml) ClusterIP Service, [k8s/ingress.yaml](k8s/ingress.yaml) Traefik 인그레스(WebSocket 포함), 응답 헤더 `X-Instance` [src/app.js](src/app.js) | — |
+| **[5단계] 상태를 인스턴스 밖 공용 저장소에** | 공유 볼륨 [k8s/storage.yaml](k8s/storage.yaml) PVC → `/data/replay.db`(회원·세션·방송·라이브 상태·댓글·후원), `/data/uploads`(영상), 다중 프로세스 SQLite `busy_timeout`·`BEGIN IMMEDIATE` 마이그레이션 [src/database.js](src/database.js). Redis [k8s/redis.yaml](k8s/redis.yaml) + [src/realtime/bus.js](src/realtime/bus.js): 라이브 시그널링·댓글·후원·종료 알림 pub/sub, 송출자 접속 표시 TTL 키 [src/lives/live.signaling.js](src/lives/live.signaling.js), 재접속 유예·주기 점검 [src/lives/live.service.js](src/lives/live.service.js) | 송출·시청 화면 자동 재접속 [public/live.js](public/live.js) |
+| **[5단계] 부하 생성** | k6 스크립트 [k8s/load/k6-chzzk.js](k8s/load/k6-chzzk.js) + 클러스터 안 Job [k8s/load/k6-job.yaml](k8s/load/k6-job.yaml), 실행 도우미 [scripts/k3d.sh](scripts/k3d.sh) | — |
 | README | 이 문서 | — |
 
 ### 녹화방송 (1단계 + 3단계)
@@ -158,6 +221,16 @@ TOSS_SECRET_KEY=test_sk_xxxxxxxxxxxxxxxxxxxxxxxx
 - 목록은 누구나 볼 수 있고 오래된 순입니다. 작성은 로그인 회원만 할 수 있고, 작성자 닉네임이 함께 표시됩니다.
 - 수정·삭제는 **작성자만** 할 수 있습니다. 방송 소유자라도 남의 댓글은 고치거나 지울 수 없습니다. 수정한 댓글에는 "(수정됨)"이 붙습니다.
 - **라이브 댓글은 실시간**: 작성·수정·삭제가 그 라이브에 연결된 모든 시청자와 송출자(휴대폰 송출 화면 포함)에게 WebSocket으로 즉시 전달됩니다. 녹화방송 댓글은 내가 쓴 것만 바로 반영되고, 새로고침하면 다른 사람 댓글이 보입니다.
+
+### 여러 인스턴스에서의 라이브 방송 (5단계에서 바뀐 규칙)
+
+인스턴스가 늘고 줄 때마다 WebSocket 이 끊길 수 있으므로, 2단계의 "송출자 연결이 끊기면 즉시 종료", "서버가 시작되면 방송 중인 라이브를 모두 종료"를 다음처럼 바꿨습니다([ADR 0003](docs/adr/0003-shared-sqlite-volume-and-redis-bus.md)).
+
+- 송출자·시청자 화면은 연결이 끊기면(인스턴스 종료 코드 1012, 네트워크 끊김) **자동으로 다시 접속**하고, 송출자는 시청자마다 영상 연결을 새로 맺습니다.
+- 송출자 인스턴스는 Redis 에 **송출자 접속 표시**(TTL 20초)를 계속 갱신합니다. 연결이 끊긴 뒤 **재접속 유예 20초** 안에 어느 인스턴스로든 다시 붙으면 방송이 이어지고, 돌아오지 않으면 **어느 인스턴스든 5초마다 도는 점검**이 표시가 사라진 라이브를 종료합니다. 새 인스턴스가 뜬다고 남의 라이브를 끝내지 않습니다.
+- `■ 송출 종료` 버튼, 탭 닫기·다른 화면 이동은 유예 없이 즉시 종료합니다.
+- 소유자가 다른 화면으로 다시 송출에 참여하면 그 화면이 송출자가 되고 이전 연결은 닫힙니다(4001).
+- 시그널링·댓글·후원·종료 알림은 Redis pub/sub 로 모든 인스턴스에 퍼지고, 각 인스턴스는 자기에게 붙은 연결에만 전달합니다. 송출자가 A 파드, 시청자가 B 파드에 붙어도 영상 협상이 됩니다.
 
 ### 후원 (4단계)
 
@@ -227,6 +300,8 @@ TOSS_SECRET_KEY=test_sk_xxxxxxxxxxxxxxxxxxxxxxxx
 - 후원 환불·결제 취소(확정 후), 받는 회원의 정산·출금, 익명 후원, 회원별 "내 후원 내역" 화면
 - 토스 웹훅 서명(`tosspayments-webhook-signature`) 검증: 대신 웹훅 본문을 믿지 않고 결제 조회 API로 다시 확인합니다
 - 실제 금전 결제: 토스 `live_` 키는 서버가 거부합니다
+- 여러 노드 클러스터: 공유 볼륨의 SQLite 는 단일 노드에서만 안전합니다. 노드가 늘면 PostgreSQL·오브젝트 스토리지로 옮겨야 합니다([ADR 0003](docs/adr/0003-shared-sqlite-volume-and-redis-bus.md))
+- Redis 고가용성(Sentinel·클러스터), 클러스터 인그레스 TLS, 클라우드 배포: 다음 단계
 - 비밀번호 찾기·변경, 이메일 인증, 회원 탈퇴, 소셜 로그인
 - 방송 소유자의 댓글 관리(남의 댓글 삭제) 권한, 관리자 역할
 - 로그인 시도 횟수 제한·요청 속도 제한: 공개 서비스로 운영하기 전에 추가가 필요합니다
@@ -333,19 +408,131 @@ TOSS_SECRET_KEY=test_sk_xxxxxxxxxxxxxxxxxxxxxxxx
 24. **금액 변조**(선택): 모의 결제창의 `금액 변조 테스트` 를 펼쳐 50,000원 주문의 결제 금액·성공 주소 금액을 1,000으로 바꾸고 `결제 성공` → "후원을 확정하지 못했습니다 — 결제 금액이 후원 주문 금액과 다릅니다". 합계 변화 없음.
 25. **라이브 후원 알림**: B가 라이브를 송출하고 C가 시청하며 후원하면, **휴대폰 송출 화면과 다른 시청 화면에 "○○님 10,000원 후원!" 알림**이 뜨고 라이브의 후원 합계가 올라갑니다. 승인 통지를 다시 보내도 알림은 다시 뜨지 않습니다.
 
-### 7. 영속 저장
+### 7. 로컬 오토스케일: 스케일 아웃·인과 상태 유지 (5단계)
 
-26. 서버를 `Ctrl+C` 로 종료 후 다시 `npm start`. 방송·회원·댓글·후원 내역과 합계가 그대로 남고, 로그인 상태도 유지됩니다(세션 7일). 방송 중이던 라이브는 종료로 바뀝니다.
+27. **배포**: `scripts/k3d.sh up` → `scripts/k3d.sh deploy`. `kubectl -n chzzk get pods` 에 `chzzk-…` 파드 2개와 `redis-…` 1개가 `Running`, `kubectl -n chzzk get hpa` 가 `cpu: 2%/50%  2  5  2` 처럼 보이면 준비된 것입니다(지표가 `<unknown>` 이면 1분쯤 기다립니다).
+28. **요청 분산 확인**: `curl -s -D - -o /dev/null http://localhost:8080/healthz` 를 여러 번 실행하면 `X-Instance` 헤더가 파드 이름 두 개를 번갈아 보여줍니다.
+29. **상태 준비**: <http://localhost:8080> 에서 회원가입(로그인 유지) → 녹화방송 업로드 → 댓글 작성. 라이브를 하나 시작해 다른 창에서 시청해 두면 라이브 유지도 함께 볼 수 있습니다.
+30. **부하 → 스케일 아웃**: 터미널 하나에서 `kubectl -n chzzk get hpa chzzk -w`(또는 `scripts/k3d.sh watch`), 다른 터미널에서 `scripts/k3d.sh load`. 1분 안팎에 CPU 사용률이 50%를 넘고 `REPLICAS` 가 3·4·5로 늘어납니다(`kubectl -n chzzk get pods` 에 새 파드).
+31. **스케일 중 상태 확인**: 늘어나는 동안 브라우저를 새로고침하고 방송 목록·상세·댓글을 오가도 **로그인 상태와 목록·댓글이 그대로**입니다(응답 헤더 `X-Instance` 는 매번 다른 파드일 수 있음). 시청 중인 라이브는 끊기지 않거나, 인스턴스가 바뀌면 몇 초 안에 자동으로 다시 붙습니다.
+32. **부하 종료 → 스케일 인**: k6 Job 이 끝나면(약 3분) CPU 가 내려가고, 안정화 60초 뒤 `REPLICAS` 가 2로 돌아옵니다. 이때도 로그인·목록·댓글·업로드 영상이 그대로입니다.
+33. **부하 결과**: `kubectl -n chzzk logs job/chzzk-load` 의 `chzzk_responses_by_instance` 에서 응답이 여러 파드로 나뉜 것과 실패율(`http_req_failed`)을 볼 수 있습니다.
+
+#### 실측 결과 (2026-11-22)
+
+이 저장소의 설정 그대로 Windows 11 + Docker Desktop 29.9 + k3d 5.9.0(k3s v1.35.5) 에서 실행한 기록입니다. `scripts/k3d.sh watch` 와 같은 방식으로 5초마다 기록했습니다. 왼쪽부터 시각, HPA 의 평균 CPU 사용률/목표(requests 100m 대비), HPA 가 본 현재 파드 수(`replicas`), 실제 `chzzk` 파드 상태입니다. 2개 → 4 → 5(최대)로 늘었다가 부하가 끝나고 안정화 60초 뒤 4 → 2(최소)로 줄었습니다.
+
+```text
+17:40:13 cpu: 1%/50% replicas=2 pods=[Running,Running,]
+17:40:19 cpu: 1%/50% replicas=2 pods=[Running,Running,]
+17:40:24 cpu: 1%/50% replicas=2 pods=[Running,Running,]
+17:40:30 cpu: 3%/50% replicas=2 pods=[Running,Running,]
+17:40:35 cpu: 3%/50% replicas=2 pods=[Running,Running,]
+17:40:41 cpu: 4%/50% replicas=2 pods=[Running,Running,]
+17:40:46 cpu: 4%/50% replicas=2 pods=[Running,Running,]
+17:40:52 cpu: 4%/50% replicas=2 pods=[Running,Running,]
+17:40:57 cpu: 111%/50% replicas=2 pods=[Running,Running,Running,Running,]
+17:41:03 cpu: 111%/50% replicas=2 pods=[Running,Running,Running,Running,]
+17:41:08 cpu: 111%/50% replicas=2 pods=[Running,Running,Running,Running,]
+17:41:14 cpu: 291%/50% replicas=4 pods=[Running,Running,Running,Running,Running,]
+17:41:20 cpu: 291%/50% replicas=4 pods=[Running,Running,Running,Running,Running,]
+17:41:26 cpu: 322%/50% replicas=5 pods=[Running,Running,Running,Running,Running,]
+17:41:31 cpu: 322%/50% replicas=5 pods=[Running,Running,Running,Running,Running,]
+17:41:37 cpu: 322%/50% replicas=5 pods=[Running,Running,Running,Running,Running,]
+17:41:42 cpu: 132%/50% replicas=5 pods=[Running,Running,Running,Running,Running,]
+17:41:48 cpu: 132%/50% replicas=5 pods=[Running,Running,Running,Running,Running,]
+17:41:54 cpu: 132%/50% replicas=5 pods=[Running,Running,Running,Running,Running,]
+17:41:59 cpu: 131%/50% replicas=5 pods=[Running,Running,Running,Running,Running,]
+17:42:05 cpu: 131%/50% replicas=5 pods=[Running,Running,Running,Running,Running,]
+17:42:10 cpu: 131%/50% replicas=5 pods=[Running,Running,Running,Running,Running,]
+17:42:15 cpu: 127%/50% replicas=5 pods=[Running,Running,Running,Running,Running,]
+17:42:21 cpu: 127%/50% replicas=5 pods=[Running,Running,Running,Running,Running,]
+17:42:27 cpu: 130%/50% replicas=5 pods=[Running,Running,Running,Running,Running,]
+17:42:32 cpu: 130%/50% replicas=5 pods=[Running,Running,Running,Running,Running,]
+17:42:38 cpu: 130%/50% replicas=5 pods=[Running,Running,Running,Running,Running,]
+17:42:43 cpu: 132%/50% replicas=5 pods=[Running,Running,Running,Running,Running,]
+17:42:49 cpu: 132%/50% replicas=5 pods=[Running,Running,Running,Running,Running,]
+17:42:54 cpu: 132%/50% replicas=5 pods=[Running,Running,Running,Running,Running,]
+17:43:00 cpu: 136%/50% replicas=5 pods=[Running,Running,Running,Running,Running,]
+17:43:06 cpu: 136%/50% replicas=5 pods=[Running,Running,Running,Running,Running,]
+17:43:12 cpu: 139%/50% replicas=5 pods=[Running,Running,Running,Running,Running,]
+17:43:18 cpu: 139%/50% replicas=5 pods=[Running,Running,Running,Running,Running,]
+17:43:23 cpu: 139%/50% replicas=5 pods=[Running,Running,Running,Running,Running,]
+17:43:28 cpu: 118%/50% replicas=5 pods=[Running,Running,Running,Running,Running,]
+17:43:34 cpu: 118%/50% replicas=5 pods=[Running,Running,Running,Running,Running,]
+17:43:39 cpu: 118%/50% replicas=5 pods=[Running,Running,Running,Running,Running,]
+17:43:45 cpu: 39%/50% replicas=5 pods=[Running,Running,Running,Running,Running,]
+17:43:50 cpu: 39%/50% replicas=5 pods=[Running,Running,Running,Running,Running,]
+17:43:55 cpu: 39%/50% replicas=5 pods=[Running,Running,Running,Running,Running,]
+17:44:01 cpu: 2%/50% replicas=5 pods=[Running,Running,Running,Running,Running,]
+17:44:07 cpu: 2%/50% replicas=5 pods=[Running,Running,Running,Running,Running,]
+17:44:12 cpu: 1%/50% replicas=5 pods=[Running,Running,Running,Running,Running,]
+17:44:18 cpu: 1%/50% replicas=5 pods=[Running,Running,Running,Running,Running,]
+17:44:23 cpu: 1%/50% replicas=5 pods=[Running,Running,Running,Running,Running,]
+17:44:29 cpu: 1%/50% replicas=5 pods=[Running,Running,Completed,Running,Running,]
+17:44:34 cpu: 1%/50% replicas=5 pods=[Running,Running,Running,Running,]
+17:44:40 cpu: 1%/50% replicas=5 pods=[Running,Running,Running,Running,]
+17:44:45 cpu: 2%/50% replicas=4 pods=[Running,Running,]
+17:44:50 cpu: 2%/50% replicas=4 pods=[Running,Running,]
+17:44:56 cpu: 2%/50% replicas=2 pods=[Running,Running,]
+17:45:01 cpu: 2%/50% replicas=2 pods=[Running,Running,]
+17:45:07 cpu: 2%/50% replicas=2 pods=[Running,Running,]
+17:45:12 cpu: 2%/50% replicas=2 pods=[Running,Running,]
+
+# k6 부하 Job 요약 (kubectl -n chzzk logs job/chzzk-load)
+checks_succeeded...: 100.00% 33453 out of 33453
+chzzk_responses_by_instance....: 47730  280.360308/s
+http_req_duration..............: avg=101.63ms p(95)=380.8ms max=3.99s
+http_req_failed................: 0.00%  0 out of 49363
+http_reqs......................: 49363  289.952354/s
+default ✓ [ 100% ] 00/50 VUs  2m50s
+```
+
+같은 시간 동안 인그레스(`http://localhost:8080`)로 5초마다 로그인 세션(`/api/auth/me`)·방송 목록·댓글·업로드 영상을 조회한 기록입니다. `@xxxxx` 는 응답한 파드 이름 끝 5자리입니다(스케일 아웃 직전·직후는 5초마다, 나머지는 15초 간격으로 줄여 실었습니다). 파드가 2 → 5 → 2 로 바뀌는 동안 한 번도 로그아웃되거나 목록·댓글·영상이 사라지지 않았습니다.
+
+```text
+17:40:14 me=스케일확인@4t2d7 broadcasts=1@hqsfm comments=1 video=ok
+17:40:19 me=스케일확인@4t2d7 broadcasts=1@hqsfm comments=1 video=ok
+17:40:24 me=스케일확인@4t2d7 broadcasts=1@hqsfm comments=1 video=ok
+17:40:54 me=스케일확인@4t2d7 broadcasts=1@hqsfm comments=1 video=ok
+17:41:01 me=스케일확인@hqsfm broadcasts=1@4t2d7 comments=1 video=ok
+17:41:06 me=스케일확인@6xwtg broadcasts=1@4t2d7 comments=1 video=ok
+17:41:12 me=스케일확인@hqsfm broadcasts=1@4gkmt comments=1 video=ok
+17:41:17 me=스케일확인@6xwtg broadcasts=1@hqsfm comments=1 video=ok
+17:41:22 me=스케일확인@4t2d7 broadcasts=1@wvwwx comments=1 video=ok
+17:41:32 me=스케일확인@6xwtg broadcasts=1@4gkmt comments=1 video=ok
+17:41:47 me=스케일확인@6xwtg broadcasts=1@4t2d7 comments=1 video=ok
+17:42:07 me=스케일확인@4gkmt broadcasts=1@wvwwx comments=1 video=ok
+17:42:22 me=스케일확인@hqsfm broadcasts=1@wvwwx comments=1 video=ok
+17:42:37 me=스케일확인@4gkmt broadcasts=1@4t2d7 comments=1 video=ok
+17:43:02 me=스케일확인@6xwtg broadcasts=1@4gkmt comments=1 video=ok
+17:43:17 me=스케일확인@6xwtg broadcasts=1@4t2d7 comments=1 video=ok
+17:43:32 me=스케일확인@4gkmt broadcasts=1@wvwwx comments=1 video=ok
+17:43:47 me=스케일확인@hqsfm broadcasts=1@wvwwx comments=1 video=ok
+17:44:02 me=스케일확인@4gkmt broadcasts=1@4t2d7 comments=1 video=ok
+17:44:17 me=스케일확인@6xwtg broadcasts=1@4gkmt comments=1 video=ok
+17:44:32 me=스케일확인@4t2d7 broadcasts=1@4gkmt comments=1 video=ok
+17:44:47 me=스케일확인@4t2d7 broadcasts=1@hqsfm comments=1 video=ok
+17:45:02 me=스케일확인@4t2d7 broadcasts=1@hqsfm comments=1 video=ok
+```
+
+라이브 시그널링이 파드를 넘나드는지도 같은 클러스터(실제 Redis)에서 확인했습니다: 송출자는 `…hqsfm`, 시청자는 `…4t2d7` 파드에 붙은 상태에서 offer·answer 가 전달되었고, `…hqsfm` 로 쓴 댓글과 `…4t2d7` 로 보낸 종료 요청이 양쪽 연결 모두에 도착했습니다.
+
+### 8. 영속 저장
+
+34. 서버를 `Ctrl+C` 로 종료 후 다시 `npm start`. 방송·회원·댓글·후원 내역과 합계가 그대로 남고, 로그인 상태도 유지됩니다(세션 7일). 방송 중이던 라이브는 송출자가 돌아오지 않으면 재접속 유예 뒤 종료로 바뀝니다.
 
 ### 자동 테스트
 
-`npm test` 는 임시 디렉터리에서 서버를 띄워 56개 시나리오를 확인합니다.
+`npm test` 는 임시 디렉터리에서 서버를 띄워 64개 시나리오를 확인합니다.
 
 - 인증([test/auth.test.js](test/auth.test.js)): 가입 즉시 로그인, HttpOnly·SameSite 쿠키, scrypt 해시 저장, 입력 검증·중복 409, 로그인 실패 메시지 동일, 로그아웃 후 같은 토큰 무효, 세션 토큰 해시 저장, 만료
 - 녹화방송([test/broadcasts.test.js](test/broadcasts.test.js)): 1단계 기능, 비로그인 등록 401(파일 미저장), 수정·삭제 401/403/200, 삭제 시 파일·댓글 정리, 다른 출처 요청 403, 재시작 후 유지, 이전 DB 마이그레이션·소유자 없는 방송 관리 불가
 - 라이브([test/lives.test.js](test/lives.test.js)): 시작 401, 동시 방송 409, 종료·수정·삭제 401/403/200, 비로그인·다른 회원의 송출자 참여 거절, 시그널링 중계, 라이브 댓글 실시간 전달, 다른 출처 WebSocket 거절, 재시작
 - 댓글([test/comments.test.js](test/comments.test.js)): 비로그인 작성 401, 작성자 연결, 공개 목록·방송별 분리, 검증, 수정·삭제 401/403(방송 소유자 포함)/200, 종료된 라이브 댓글, 재시작 후 유지
 - 후원([test/donations.test.js](test/donations.test.js), 모의 결제): 공개 설정에 비밀 없음, 주문 401·자기 방송 403·소유자 없음·금액 범위·메시지 길이, 성공 확정과 내역·합계, **승인 재요청 3회·자동 웹훅·웹훅 재전송 5회·웹훅 직접 3회에도 1회 적립**, 위조 웹훅(없는 결제·READY 결제) 무시, 리다이렉트·결제창 금액 변조 거절, 남의 주문 401/403, 실패·취소 후 확정 불가, 30분 만료, 주문 후 방송 삭제 시 확정 거절, `order_id`·`payment_key` UNIQUE, 라이브 실시간 후원 알림 1회, 재시작 후 유지
+- 여러 인스턴스([test/multi-instance.test.js](test/multi-instance.test.js), 서버 2~3개가 같은 DB 파일·같은 버스 공유): `X-Instance`·`/healthz`, A 에서 만든 세션으로 B 로그인, A 에서 등록한 방송·업로드 영상·댓글·후원이 B 에서 보임, 두 인스턴스에 동시에 온 승인 요청도 1회 확정, 송출자 A·시청자 B 사이 시그널링·댓글·후원·종료 전달, 송출자 인스턴스가 1012 로 내려가도 다른 인스턴스로 재접속하면 유지, 새 인스턴스가 떠도 남의 라이브를 끝내지 않음
+- 라이브 재접속([test/lives.test.js](test/lives.test.js)): 유예 안 재접속 시 유지·돌아오지 않으면 종료, 새 화면 이어받기(4001), 재시작 후 주기 점검 종료
 - 토스 어댑터([test/toss.test.js](test/toss.test.js), 가짜 토스 API 서버): 클라이언트 키만 공개·모의 결제 경로 닫힘, 승인 API 호출 형식(Basic 인증·저장된 금액), 웹훅 선도착 후 `ALREADY_PROCESSED_PAYMENT` 에도 1회 적립, 카드사 거절 시 실패 기록, `live_` 키 거부
 
 ## 디렉터리 구조
@@ -361,6 +548,7 @@ chzzk/
 │  │  ├─ errors.js              # HttpError(400/401/403/404/409), 공통 에러 응답
 │  │  └─ tls.js                 # HTTPS 인증서 로드/자체 서명 생성, LAN IP
 │  ├─ storage/video-storage.js  # 업로드 영상 저장·삭제·서빙(/media)
+│  ├─ realtime/bus.js           # 인스턴스 사이 메시지 버스(Redis 또는 메모리): pub/sub, TTL 접속 표시
 │  ├─ auth/                     # 인증·인가 (3단계)
 │  │  ├─ auth.router.js         # 가입·로그인·로그아웃·me
 │  │  ├─ auth.service.js        # 가입 검증, 로그인, 세션 발급·확인
@@ -394,7 +582,18 @@ chzzk/
 │  ├─ mock-pay.html, mock-pay.js # 모의 결제창 (토스 키가 없을 때만)
 │  ├─ common.js                 # 공통 도우미, 로그인 상태
 │  └─ style.css
-├─ test/                        # node:test (auth, broadcasts, lives, comments, donations, toss)
+├─ test/                        # node:test (auth, broadcasts, lives, comments, donations, toss, multi-instance)
+├─ Dockerfile, .dockerignore    # 서버 컨테이너 이미지 (5단계)
+├─ k8s/                         # 로컬 Kubernetes (5단계)
+│  ├─ k3d-cluster.yaml          # k3d 클러스터(노드 1, 호스트 8080 → 인그레스)
+│  ├─ kustomization.yaml        # kubectl apply -k k8s
+│  ├─ app.yaml                  # chzzk Deployment(replicas 2, probes, 리소스, 공유 볼륨)
+│  ├─ service.yaml, ingress.yaml # 요청 분산(Service + Traefik)
+│  ├─ hpa.yaml                  # CPU 50%, 2~5 파드
+│  ├─ storage.yaml              # 공유 볼륨 PVC (SQLite·업로드)
+│  ├─ redis.yaml                # Redis (pub/sub, 송출자 접속 표시)
+│  └─ load/                     # k6 스크립트 + Job
+├─ scripts/k3d.sh               # up / deploy / load / watch / status / down
 ├─ docs/adr/                    # 설계 결정 기록
 ├─ GLOSSARY.md                  # 도메인 용어
 ├─ data/                        # (실행 시 생성) replay.db, uploads/, tls/

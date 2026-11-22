@@ -9,6 +9,11 @@ import { mountDonations, showDonationToast } from './donations.js';
 
 const signalingUrl = () => `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/lives`;
 
+// 서버 인스턴스가 바뀌거나(스케일 인·재배포) 네트워크가 잠깐 끊기면 다시 접속한다.
+// 1000(정상 종료·방송 종료), 1008(권한 없음 등), 4001(다른 화면이 송출을 이어받음)은 다시 접속하지 않는다.
+const NO_RECONNECT = new Set([1000, 1008, 4001]);
+const reconnectDelay = (attempt) => Math.min(500 * 2 ** attempt, 5000);
+
 // ───────────────────────── 송출 ─────────────────────────
 
 export function renderGoLive(onLeave) {
@@ -112,28 +117,52 @@ export function renderGoLive(onLeave) {
   });
 
   function startBroadcast({ live, rtcConfig }) {
-    const socket = new WebSocket(signalingUrl());
-    const peers = new Map(); // viewerId → RTCPeerConnection
+    const current = { live, socket: null, peers: new Map(), attempt: 0 };
+    const { peers } = current; // viewerId → RTCPeerConnection
     const pending = new Map(); // viewerId → answer 전에 도착한 ICE 후보
     const updateViewers = () => { q(root, 'viewers').textContent = `시청자 ${peers.size}명`; };
+    const send = (msg) => { if (current.socket?.readyState === WebSocket.OPEN) current.socket.send(JSON.stringify(msg)); };
 
-    socket.addEventListener('open', () => {
-      socket.send(JSON.stringify({ type: 'join', role: 'broadcaster', liveId: live.id }));
-    });
+    function connect() {
+      const socket = new WebSocket(signalingUrl());
+      current.socket = socket;
+      socket.addEventListener('open', () => {
+        socket.send(JSON.stringify({ type: 'join', role: 'broadcaster', liveId: live.id }));
+      });
+      socket.addEventListener('message', (event) => onMessage(JSON.parse(event.data)));
+      socket.addEventListener('close', (event) => {
+        if (session !== current || current.socket !== socket) return;
+        if (NO_RECONNECT.has(event.code)) {
+          if (event.code !== 1000) finish(event.reason === 'rejected' ? '송출이 거절되었습니다.' : '송출 연결이 닫혔습니다.');
+          return;
+        }
+        // 서버 인스턴스가 바뀌는 중일 수 있다. 영상 연결은 다시 붙은 뒤 시청자마다 새로 맺는다.
+        message.textContent = '서버와 다시 연결하는 중… (방송은 잠시 유지됩니다)';
+        setTimeout(() => { if (session === current) connect(); }, reconnectDelay(current.attempt++));
+      });
+    }
 
-    socket.addEventListener('message', async (event) => {
-      const msg = JSON.parse(event.data);
-      if (msg.type === 'viewer-joined') {
+    async function onMessage(msg) {
+      if (msg.type === 'joined') {
+        current.attempt = 0;
+        // 다시 접속했다면 이전 영상 연결은 버리고, 서버가 알려 주는 시청자마다 새로 맺는다.
+        for (const pc of peers.values()) pc.close();
+        peers.clear();
+        pending.clear();
+        updateViewers();
+        message.textContent = '송출 중입니다. 다른 화면에서 방송 목록 → 이 방송을 열면 시청할 수 있습니다.';
+      } else if (msg.type === 'viewer-joined') {
+        peers.get(msg.viewerId)?.close();
         const pc = new RTCPeerConnection(rtcConfig);
         peers.set(msg.viewerId, pc);
         updateViewers();
         stream.getTracks().forEach((track) => pc.addTrack(track, stream));
         pc.addEventListener('icecandidate', ({ candidate }) => {
-          if (candidate) socket.send(JSON.stringify({ type: 'ice', to: msg.viewerId, candidate }));
+          if (candidate) send({ type: 'ice', to: msg.viewerId, candidate });
         });
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
-        socket.send(JSON.stringify({ type: 'offer', to: msg.viewerId, sdp: pc.localDescription }));
+        send({ type: 'offer', to: msg.viewerId, sdp: pc.localDescription });
       } else if (msg.type === 'answer') {
         const pc = peers.get(msg.from);
         if (!pc) return;
@@ -160,14 +189,10 @@ export function renderGoLive(onLeave) {
       } else if (msg.type === 'error') {
         showError(errorBox, msg.error);
       }
-    });
+    }
 
-    // 서버와 연결이 끊기면 서버는 이 방송을 종료 처리한다.
-    socket.addEventListener('close', () => {
-      if (session) finish('서버와 연결이 끊겨 방송이 종료되었습니다.');
-    });
-
-    return { live, socket, peers };
+    connect();
+    return current;
   }
 
   function finish(text) {
@@ -175,7 +200,7 @@ export function renderGoLive(onLeave) {
       const { socket, peers } = session;
       session = null;
       for (const pc of peers.values()) pc.close();
-      socket.close();
+      socket?.close(1000);
     }
     stream?.getTracks().forEach((track) => track.stop());
     stream = null;
@@ -193,9 +218,16 @@ export function renderGoLive(onLeave) {
   };
   window.addEventListener('beforeunload', warnBeforeUnload);
 
-  // 다른 화면으로 이동하면 송출을 끝내고 카메라를 끈다.
+  // 탭을 닫거나 다른 화면으로 이동하면 재접속 유예를 기다리지 않고 바로 종료한다.
+  const endNow = () => {
+    if (session) fetch(`/api/lives/${session.live.id}/end`, { method: 'POST', keepalive: true }).catch(() => {});
+  };
+  window.addEventListener('pagehide', endNow);
+
   onLeave(() => {
     window.removeEventListener('beforeunload', warnBeforeUnload);
+    window.removeEventListener('pagehide', endNow);
+    endNow();
     finish('');
   });
 }
@@ -227,7 +259,7 @@ export async function renderWatchLive(id, onLeave) {
   let left = false;
   onLeave(() => {
     left = true;
-    socket?.close();
+    socket?.close(1000);
     pc?.close();
   });
 
@@ -310,15 +342,36 @@ export async function renderWatchLive(id, onLeave) {
   if (left) return;
 
   const pendingCandidates = [];
-  socket = new WebSocket(signalingUrl());
+  let attempt = 0;
+  const send = (msg) => { if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(msg)); };
 
-  socket.addEventListener('open', () => {
-    socket.send(JSON.stringify({ type: 'join', role: 'viewer', liveId: live.id }));
-  });
+  function connect() {
+    const ws = new WebSocket(signalingUrl());
+    socket = ws;
+    ws.addEventListener('open', () => {
+      ws.send(JSON.stringify({ type: 'join', role: 'viewer', liveId: live.id }));
+    });
+    ws.addEventListener('message', (event) => onMessage(JSON.parse(event.data)));
+    ws.addEventListener('close', async (event) => {
+      if (left || socket !== ws || badge.classList.contains('ended')) return;
+      if (NO_RECONNECT.has(event.code) && event.code !== 1000) return;
+      // 서버 인스턴스가 바뀌었거나 네트워크가 끊긴 경우: 방송이 아직 진행 중이면 다시 접속한다.
+      try {
+        const latest = await api(`/api/lives/${live.id}`);
+        if (latest.status !== 'live') return showEnded('방송이 종료되었습니다.');
+      } catch {
+        // 상태 확인도 실패하면 잠시 뒤 다시 시도한다.
+      }
+      message.textContent = '서버와 다시 연결하는 중…';
+      setTimeout(() => { if (!left) connect(); }, reconnectDelay(attempt++));
+    });
+  }
 
-  socket.addEventListener('message', async (event) => {
-    const msg = JSON.parse(event.data);
-    if (msg.type === 'offer') {
+  async function onMessage(msg) {
+    if (msg.type === 'joined') {
+      attempt = 0;
+      if (!player.srcObject) message.textContent = '송출자와 연결하는 중…';
+    } else if (msg.type === 'offer') {
       // 송출자가 카메라를 바꾸거나 다시 연결하면 새 offer 가 온다.
       pc?.close();
       pc = new RTCPeerConnection(rtcConfig);
@@ -327,7 +380,7 @@ export async function renderWatchLive(id, onLeave) {
         message.textContent = '';
       });
       pc.addEventListener('icecandidate', ({ candidate }) => {
-        if (candidate) socket.send(JSON.stringify({ type: 'ice', candidate }));
+        if (candidate) send({ type: 'ice', candidate });
       });
       pc.addEventListener('connectionstatechange', () => {
         if (pc.connectionState === 'failed') {
@@ -338,7 +391,7 @@ export async function renderWatchLive(id, onLeave) {
       for (const candidate of pendingCandidates.splice(0)) await pc.addIceCandidate(candidate);
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
-      socket.send(JSON.stringify({ type: 'answer', sdp: pc.localDescription }));
+      send({ type: 'answer', sdp: pc.localDescription });
     } else if (msg.type === 'ice') {
       if (pc?.remoteDescription) await pc.addIceCandidate(msg.candidate);
       else pendingCandidates.push(msg.candidate);
@@ -353,17 +406,7 @@ export async function renderWatchLive(id, onLeave) {
     } else if (msg.type === 'error') {
       message.textContent = msg.error;
     }
-  });
+  }
 
-  socket.addEventListener('close', async () => {
-    if (left || badge.classList.contains('ended')) return;
-    // 서버가 재시작되었거나 네트워크가 끊긴 경우: 실제 방송 상태를 다시 확인한다.
-    try {
-      const latest = await api(`/api/lives/${live.id}`);
-      if (latest.status !== 'live') showEnded('방송이 종료되었습니다.');
-      else message.textContent = '서버와 연결이 끊겼습니다. 새로고침해 주세요.';
-    } catch {
-      message.textContent = '서버와 연결이 끊겼습니다. 새로고침해 주세요.';
-    }
-  });
+  connect();
 }

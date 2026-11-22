@@ -1,4 +1,3 @@
-import { EventEmitter } from 'node:events';
 import { badRequest, conflict, notFound } from '../http/errors.js';
 import { isOwner, requireMember, requireOwner } from '../auth/access.js';
 
@@ -7,39 +6,53 @@ export const LiveStatus = Object.freeze({ LIVE: 'live', ENDED: 'ended' });
 
 const TITLE_MAX = 100;
 
+// 송출자가 지금 어느 인스턴스엔가 붙어 있다는 표시(TTL 키). 값은 송출자 연결 ID.
+export const broadcasterPresenceKey = (liveId) => `live:${liveId}:broadcaster`;
+
 // 라이브 방송의 시작·종료·수정·삭제 규칙. HTTP·WebSocket을 모른다.
 // actor 는 요청한 회원(비로그인이면 null). 시작은 회원만, 나머지 제어는 소유자만 할 수 있다.
-// 서버가 재시작되면 송출자 연결이 모두 사라지므로, 시작할 때 방송 중이던 것을 모두 종료한다.
 //
-// events: 'ended' (liveId) — 어떤 이유로든 방송 중 → 종료가 되었을 때
-export function createLiveService({ repository, comments, broadcasterConnectTimeoutMs = 30_000 }) {
-  const events = new EventEmitter();
-  const connectTimers = new Map(); // liveId → 송출자가 접속하지 않으면 종료할 타이머
-
-  repository.markAllEnded();
-
+// 여러 인스턴스가 함께 돌기 때문에(docs/adr/0003) "송출자 연결이 끊기면 종료"를 타이머로 하지 않는다.
+// 송출자의 인스턴스가 접속 표시를 계속 갱신하고, 어느 인스턴스든 sweep() 으로
+// 표시가 사라진(= 재접속 유예 시간 안에 돌아오지 않은) 라이브를 종료한다.
+//
+// 종료되면 버스의 'live-ended' 채널로 { liveId } 를 모든 인스턴스에 알린다.
+export function createLiveService({
+  repository,
+  comments,
+  bus,
+  connectWindowMs = 30_000, // 시작 후 송출자가 처음 접속하기까지 기다리는 시간
+  sweepIntervalMs = 5_000,
+}) {
   function find(id) {
     const live = Number.isInteger(id) && id > 0 ? repository.findById(id) : null;
     if (!live) throw notFound('라이브 방송을 찾을 수 없습니다.');
     return live;
   }
 
-  function endLive(id) {
-    clearTimeout(connectTimers.get(id));
-    connectTimers.delete(id);
-    if (repository.markEnded(id)) events.emit('ended', id);
+  async function endLive(id) {
+    if (!repository.markEnded(id)) return false;
+    await bus.deletePresence(broadcasterPresenceKey(id));
+    await bus.publish('live-ended', { liveId: id });
+    return true;
+  }
+
+  async function sweep() {
+    let ended = 0;
+    for (const id of repository.findOnAirIds()) {
+      if (!(await bus.getPresence(broadcasterPresenceKey(id))) && (await endLive(id))) ended++;
+    }
+    return ended;
   }
 
   return {
-    events,
-
     list() {
       return repository.findAll();
     },
 
     get: find,
 
-    start({ title }, actor) {
+    async start({ title }, actor) {
       requireMember(actor);
       const cleanTitle = validateTitle(title);
       if (repository.findOnAirByOwner(actor.id)) throw conflict('이미 방송 중인 라이브가 있습니다. 먼저 종료해 주세요.');
@@ -52,8 +65,8 @@ export function createLiveService({ repository, comments, broadcasterConnectTime
         if (/UNIQUE constraint failed/.test(err.message)) throw conflict('이미 방송 중인 라이브가 있습니다. 먼저 종료해 주세요.');
         throw err;
       }
-      // 시작만 하고 영상을 보내지 않는 라이브가 '방송 중'으로 남지 않게 한다.
-      connectTimers.set(live.id, setTimeout(() => endLive(live.id), broadcasterConnectTimeoutMs).unref());
+      // 송출자가 접속할 때까지 기다리는 표시. 시간 안에 접속하지 않으면 sweep 이 종료한다.
+      await bus.setPresence(broadcasterPresenceKey(live.id), 'waiting', connectWindowMs);
       return live;
     },
 
@@ -63,17 +76,12 @@ export function createLiveService({ repository, comments, broadcasterConnectTime
       return !!live && live.status === LiveStatus.LIVE && isOwner(actor, live);
     },
 
-    broadcasterConnected(id) {
-      clearTimeout(connectTimers.get(id));
-      connectTimers.delete(id);
-    },
-
-    // 소유자가 종료 버튼을 누른 경우
-    end(id, actor) {
+    // 소유자가 종료 버튼을 누른 경우: 유예 없이 바로 종료
+    async end(id, actor) {
       const live = find(id);
       requireOwner(actor, live);
       if (live.status === LiveStatus.ENDED) throw conflict('이미 종료된 방송입니다.');
-      endLive(id);
+      await endLive(id);
       return repository.findById(id);
     },
 
@@ -84,17 +92,21 @@ export function createLiveService({ repository, comments, broadcasterConnectTime
     },
 
     // 방송 중이면 먼저 종료해 시청자에게 알린 뒤, 라이브와 댓글을 지운다.
-    remove(id, actor) {
+    async remove(id, actor) {
       const live = find(id);
       requireOwner(actor, live);
-      endLive(id);
+      await endLive(id);
       comments.deleteAllFor('live', id);
       repository.delete(id);
     },
 
-    // 송출자 연결이 끊긴 경우 (탭 닫기, 화면 꺼짐, 네트워크 끊김)
-    broadcasterDisconnected(id) {
-      endLive(id);
+    sweep,
+
+    // 주기적으로 sweep 한다. 여러 인스턴스가 동시에 돌아도 종료는 조건부 UPDATE 라 한 번만 일어난다.
+    startSweeper() {
+      const timer = setInterval(() => { sweep().catch((err) => console.error('[live sweep]', err)); }, sweepIntervalMs);
+      timer.unref();
+      return () => clearInterval(timer);
     },
   };
 }

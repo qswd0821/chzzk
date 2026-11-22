@@ -84,15 +84,20 @@ const MIGRATIONS = [
 
 export function openDatabase(dbPath) {
   const db = new DatabaseSync(dbPath);
-  db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
+  // 여러 인스턴스(프로세스)가 공유 볼륨의 같은 파일을 쓴다(docs/adr/0003). 잠금이 풀릴 때까지 최대 5초 기다린다.
+  db.exec('PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
   migrate(db);
   return db;
 }
 
 function migrate(db) {
-  const applied = db.prepare('PRAGMA user_version').get().user_version;
-  for (let version = applied; version < MIGRATIONS.length; version++) {
-    db.exec('BEGIN');
+  for (let version = currentVersion(db); version < MIGRATIONS.length; version++) {
+    // 여러 인스턴스가 동시에 시작해도 한 인스턴스만 마이그레이션하도록 쓰기 잠금을 먼저 잡고 버전을 다시 확인한다.
+    db.exec('BEGIN IMMEDIATE');
+    if (currentVersion(db) > version) {
+      db.exec('COMMIT');
+      continue;
+    }
     try {
       db.exec(MIGRATIONS[version]);
       db.exec(`PRAGMA user_version = ${version + 1}`);
@@ -102,4 +107,8 @@ function migrate(db) {
       throw err;
     }
   }
+}
+
+function currentVersion(db) {
+  return db.prepare('PRAGMA user_version').get().user_version;
 }

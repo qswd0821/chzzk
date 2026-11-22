@@ -1,0 +1,34 @@
+# 오토스케일: 파드 평균 CPU 사용률(requests 대비)이 50% 를 넘으면 늘리고, 내려가면 줄인다. 최소 2, 최대 5.
+# 지표는 k3s 에 들어 있는 metrics-server 가 제공한다(kubectl top pods 로 확인).
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: chzzk
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: chzzk
+  minReplicas: 2
+  maxReplicas: 5
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 50
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 15
+    scaleDown:
+      # 기본 5분 대신 60초: 부하를 멈춘 뒤 줄어드는 것을 빨리 확인하기 위해
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 15

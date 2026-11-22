@@ -1,0 +1,13 @@
+# 부하 생성 Job: kubectl apply -k k8s/load
+# 다시 돌리려면 먼저 지운다: kubectl -n chzzk delete job chzzk-load
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: chzzk
+resources:
+  - k6-job.yaml
+configMapGenerator:
+  - name: chzzk-k6-script
+    files:
+      - k6-chzzk.js
+generatorOptions:
+  disableNameSuffixHash: true

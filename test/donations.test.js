@@ -11,7 +11,7 @@ let vodId;
 let orphanId;
 
 before(async () => {
-  t = await startTestServer({ env: { PAYMENT_PROVIDER: 'mock' }, liveOptions: { broadcasterConnectTimeoutMs: 60_000 } });
+  t = await startTestServer({ env: { PAYMENT_PROVIDER: 'mock' }, liveOptions: { connectWindowMs: 60_000 } });
   owner = await t.signup('creator', '크리에이터');
   fan = await t.signup('fan01', '열혈팬');
   other = await t.signup('other01', '지나가는회원');

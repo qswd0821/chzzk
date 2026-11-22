@@ -1,0 +1,29 @@
+# 클러스터 안에서 k6 로 chzzk 서비스에 부하를 건다(호스트 포트 포워딩이 병목이 되지 않도록).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: chzzk-load
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: k6
+          image: grafana/k6:latest
+          args: ["run", "/scripts/k6-chzzk.js"]
+          env:
+            - name: BASE_URL
+              value: http://chzzk.chzzk.svc.cluster.local
+            - name: VUS
+              value: "50"
+            - name: HOLD
+              value: 2m
+          volumeMounts:
+            - name: script
+              mountPath: /scripts
+      volumes:
+        - name: script
+          configMap:
+            name: chzzk-k6-script

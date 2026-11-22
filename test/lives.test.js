@@ -187,9 +187,65 @@ test('다른 사이트의 페이지는 WebSocket을 열 수 없다', async () =>
   assert.notEqual(outcome, 'open');
 });
 
-test('서버가 재시작되면 방송 중이던 라이브는 종료로 바뀐다', async () => {
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+test('송출자 연결이 잠깐 끊겨도 재접속 유예 안에 다시 붙으면 방송이 이어진다', async () => {
+  const { body: live } = await start('끊겼다 붙는 라이브', owner.cookie);
+  const first = t.connect(owner.cookie);
+  await first.opened;
+  first.send({ type: 'join', role: 'broadcaster', liveId: live.id });
+  await first.next('joined');
+
+  const viewer = t.connect();
+  await viewer.opened;
+  viewer.send({ type: 'join', role: 'viewer', liveId: live.id });
+  await viewer.next('joined');
+  await first.next('viewer-joined');
+
+  // 서버 인스턴스가 바뀌는 상황처럼 송출자 연결이 끊긴다(유예 300ms 보다 짧게 비운다).
+  first.socket.terminate();
+  await wait(150);
+  assert.equal((await getLive(live.id)).status, 'live');
+
+  const again = t.connect(owner.cookie);
+  await again.opened;
+  again.send({ type: 'join', role: 'broadcaster', liveId: live.id });
+  await again.next('joined');
+  // 다시 붙은 송출자는 기다리던 시청자와 연결을 새로 맺도록 viewer-joined 를 받는다.
+  await again.next('viewer-joined');
+
+  await wait(600); // 유예 시간의 두 배가 지나도
+  assert.equal((await getLive(live.id)).status, 'live', '송출자가 살아 있는 동안은 종료되지 않는다');
+
+  // 이번에는 돌아오지 않는다 → 유예 뒤 종료, 시청자에게 알림
+  again.socket.terminate();
+  await viewer.next('ended');
+  assert.equal((await getLive(live.id)).status, 'ended');
+});
+
+test('소유자가 새 화면으로 송출에 참여하면 그 화면이 송출자가 되고 이전 연결은 닫힌다', async () => {
+  const { body: live } = await start('이어받기 라이브', owner.cookie);
+  const oldTab = t.connect(owner.cookie);
+  await oldTab.opened;
+  oldTab.send({ type: 'join', role: 'broadcaster', liveId: live.id });
+  await oldTab.next('joined');
+
+  const newTab = t.connect(owner.cookie);
+  await newTab.opened;
+  newTab.send({ type: 'join', role: 'broadcaster', liveId: live.id });
+  await newTab.next('joined');
+
+  const kicked = await oldTab.next('error');
+  assert.match(kicked.error, /이어받았습니다/);
+  assert.equal(kicked.code, 4001);
+  await end(live.id, owner.cookie);
+});
+
+test('서버를 재시작하면, 송출자가 돌아오지 않은 라이브는 주기 점검으로 종료된다', async () => {
   const { body: live } = await start('재시작 전 방송', owner.cookie);
   await t.restart();
+  // 새 인스턴스가 뜨는 것만으로 남의 라이브를 끝내지는 않는다. 접속 표시가 없는 것을 점검이 찾아 종료한다.
+  await wait(200);
   assert.equal((await getLive(live.id)).status, 'ended');
   // 종료됐으므로 같은 회원이 새로 시작할 수 있다.
   const again = await start('재시작 후 방송', owner.cookie);

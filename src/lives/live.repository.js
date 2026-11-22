@@ -18,11 +18,7 @@ export function createLiveRepository(db) {
     SET status = 'ended', ended_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
     WHERE id = ? AND status = 'live'
   `);
-  const endAllStmt = db.prepare(`
-    UPDATE live_broadcasts
-    SET status = 'ended', ended_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-    WHERE status = 'live'
-  `);
+  const onAirIdsStmt = db.prepare(`SELECT id FROM live_broadcasts WHERE status = 'live'`);
 
   return {
     create(title, ownerId) {
@@ -59,8 +55,8 @@ export function createLiveRepository(db) {
       return endStmt.run(id).changes > 0;
     },
 
-    markAllEnded() {
-      return Number(endAllStmt.run().changes);
+    findOnAirIds() {
+      return onAirIdsStmt.all().map((row) => row.id);
     },
   };
 }

@@ -1,0 +1,76 @@
+# 치지직 서버: 여러 인스턴스(파드). 개수는 HPA(hpa.yaml)가 2~5 사이에서 조절한다.
+# 각 파드는 상태를 갖지 않는다 — DB·업로드는 공유 볼륨(chzzk-data), 실시간 상태는 Redis.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chzzk
+  labels:
+    app: chzzk
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: chzzk
+  template:
+    metadata:
+      labels:
+        app: chzzk
+    spec:
+      securityContext:
+        fsGroup: 1000 # 이미지의 node 사용자(uid 1000)가 공유 볼륨에 쓸 수 있게
+      terminationGracePeriodSeconds: 20
+      containers:
+        - name: chzzk
+          image: chzzk:local # k3d image import chzzk:local -c chzzk
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 3000
+          env:
+            - name: PORT
+              value: "3000"
+            - name: DATA_DIR
+              value: /data
+            - name: REDIS_URL
+              value: redis://redis:6379
+            - name: LIVE_RECONNECT_GRACE_SECONDS
+              value: "20"
+            - name: PAYMENT_PROVIDER
+              value: auto
+          # 토스 테스트 키를 쓰려면: kubectl -n chzzk create secret generic chzzk-secrets --from-literal=TOSS_CLIENT_KEY=test_ck_… --from-literal=TOSS_SECRET_KEY=test_sk_…
+          envFrom:
+            - secretRef:
+                name: chzzk-secrets
+                optional: true
+          resources:
+            # HPA 의 CPU 사용률은 requests 대비 비율이다(100m 의 50% = 50m).
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            failureThreshold: 2
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          lifecycle:
+            # 서비스 엔드포인트에서 빠질 시간을 준 뒤 SIGTERM 을 받는다(받으면 WebSocket 을 1012 로 닫아 다른 파드로 재접속시킴).
+            preStop:
+              exec:
+                command: ["sleep", "3"]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: chzzk-data

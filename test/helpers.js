@@ -6,32 +6,44 @@ import WebSocket from 'ws';
 import { loadConfig } from '../src/config.js';
 import { openDatabase } from '../src/database.js';
 import { createApplication } from '../src/app.js';
+import { createMemoryBus } from '../src/realtime/bus.js';
+
+// 라이브 시간 값은 테스트가 빨리 끝나도록 짧게 둔다.
+export const FAST_LIVE = { connectWindowMs: 300, reconnectGraceMs: 300, sweepIntervalMs: 50 };
 
 // 임시 디렉터리에 서버를 띄운다. restart() 는 같은 데이터로 다시 띄운다(영속 저장 확인용).
-export async function startTestServer({ env = {}, liveOptions = { broadcasterConnectTimeoutMs: 300 } } = {}) {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'chzzk-test-'));
-  const config = loadConfig({ DATA_DIR: tmpDir, ...env });
+// dataDir·bus 를 넘기면 다른 인스턴스와 같은 DB 파일·같은 버스를 쓴다(여러 인스턴스 시험용).
+export async function startTestServer({ env = {}, liveOptions = {}, dataDir, bus, instanceId } = {}) {
+  const tmpDir = dataDir ?? fs.mkdtempSync(path.join(os.tmpdir(), 'chzzk-test-'));
+  const config = loadConfig({ DATA_DIR: tmpDir, INSTANCE_ID: instanceId ?? 'test-1', ...env });
   const ctx = { config, tmpDir };
 
-  function start() {
+  async function start() {
     ctx.db = openDatabase(config.dbPath);
-    const { app, attachTo } = createApplication({ db: ctx.db, config, liveOptions });
-    ctx.server = attachTo(app.listen(0));
+    ctx.bus = bus ?? createMemoryBus();
+    const { app, attachTo } = createApplication({ db: ctx.db, config, bus: ctx.bus, liveOptions: { ...FAST_LIVE, ...liveOptions } });
+    const attached = await attachTo(app.listen(0));
+    ctx.server = attached.server;
+    ctx.shutdown = attached.shutdown;
     const { port } = ctx.server.address();
     ctx.baseUrl = `http://127.0.0.1:${port}`;
     ctx.wsUrl = `ws://127.0.0.1:${port}/ws/lives`;
   }
 
   async function stopServer() {
+    ctx.shutdown();
     ctx.server.closeAllConnections();
     ctx.server.close();
     await once(ctx.server, 'close');
     ctx.db.close();
   }
 
-  start();
-  ctx.restart = async () => { await stopServer(); start(); };
-  ctx.stop = async () => { await stopServer(); fs.rmSync(tmpDir, { recursive: true, force: true }); };
+  await start();
+  ctx.restart = async () => { await stopServer(); await start(); };
+  ctx.stop = async ({ keepData = !!dataDir } = {}) => {
+    await stopServer();
+    if (!keepData) fs.rmSync(tmpDir, { recursive: true, force: true });
+  };
 
   // fetch 래퍼: cookie(로그인 회원), json 또는 form 본문
   ctx.request = async (pathname, { method = 'GET', cookie, json, form, headers = {} } = {}) => {
@@ -73,6 +85,7 @@ export async function startTestServer({ env = {}, liveOptions = { broadcasterCon
     });
     return {
       socket,
+      closed: once(socket, 'close'),
       opened: once(socket, 'open'),
       send: (msg) => socket.send(JSON.stringify(msg)),
       next(type) {

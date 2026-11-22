@@ -1,0 +1,15 @@
+# 로컬 k3s 클러스터 (k3d: Docker 안에서 k3s 를 띄운다)
+#   k3d cluster create --config k8s/k3d-cluster.yaml
+# k3s 에는 HPA 에 필요한 metrics-server 와 Traefik 인그레스, local-path 저장소가 기본으로 들어 있다.
+# 노드는 하나다: 공유 볼륨의 SQLite 파일은 단일 노드에서만 안전하다(docs/adr/0003).
+apiVersion: k3d.io/v1alpha5
+kind: Simple
+metadata:
+  name: chzzk
+servers: 1
+agents: 0
+ports:
+  # 호스트 http://localhost:8080 → 클러스터 로드밸런서 80 → Traefik 인그레스 → chzzk 서비스
+  - port: 8080:80
+    nodeFilters:
+      - loadbalancer

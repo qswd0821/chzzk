@@ -1,3 +1,4 @@
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -21,6 +22,14 @@ export function loadConfig(env = process.env) {
     },
     iceServers: buildIceServers(env),
     payment: buildPaymentConfig(env),
+    // 여러 인스턴스로 돌 때(docs/adr/0003). REDIS_URL 이 없으면 단일 인스턴스용 메모리 버스를 쓴다.
+    redisUrl: env.REDIS_URL?.trim() || null,
+    // k8s 에서는 파드 이름(HOSTNAME)이 인스턴스 이름이 된다.
+    instanceId: env.INSTANCE_ID?.trim() || env.HOSTNAME?.trim() || os.hostname(),
+    live: {
+      // 송출자 연결이 끊긴 뒤 다시 붙기를 기다리는 시간. 지나면 라이브를 종료한다.
+      reconnectGraceMs: (Number(env.LIVE_RECONNECT_GRACE_SECONDS) || 20) * 1000,
+    },
   };
 }
 

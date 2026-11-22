@@ -1,0 +1,16 @@
+# 인스턴스 밖 공용 저장소 ①: 공유 볼륨
+#   /data/replay.db  — 회원·로그인 세션·방송·라이브 상태·댓글·후원 (SQLite, 모든 파드가 같은 파일을 쓴다)
+#   /data/uploads/   — 업로드한 녹화 영상
+# local-path 볼륨은 노드 하나에 있으므로, 같은 노드의 여러 파드가 함께 마운트할 수 있다(ReadWriteOnce 는 "노드 하나" 단위).
+# 노드가 여러 개가 되면 ReadWriteMany 저장소 + PostgreSQL 로 바꿔야 한다(docs/adr/0003).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: chzzk-data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 2Gi
