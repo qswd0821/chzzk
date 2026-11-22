@@ -4,7 +4,8 @@
 //   #/new               녹화방송 등록                               로그인 필요
 //   #/broadcasts/:id    녹화방송 상세·재생·댓글                      공개 (관리는 소유자)
 //   #/live/new          라이브 송출 (휴대폰)                         로그인 필요
-//   #/lives/:id         라이브 시청·댓글                             공개 (관리는 소유자)
+//   #/lives/:id         라이브 시청·댓글·후원                        공개 (관리는 소유자, 후원은 회원)
+//   /donation/success, /donation/fail   결제창에서 돌아온 화면(경로 기반: 결제 서비스가 쿼리를 붙인다)
 import {
   api, mount, q, showError, formatDate, formatSize, refreshSession, renderAuthArea, showLoginRequired, ownerName,
 } from './common.js';
@@ -12,6 +13,7 @@ import { renderLogin, renderSignup } from './auth.js';
 import { renderGoLive, renderWatchLive } from './live.js';
 import { mountComments } from './comments.js';
 import { mountOwnerTools } from './owner-tools.js';
+import { mountDonations, renderDonationResult } from './donations.js';
 
 const routes = [
   [/^#?\/?$/, renderList],
@@ -42,9 +44,16 @@ function route() {
   );
 }
 
-window.addEventListener('hashchange', route);
 await refreshSession();
-route();
+const donationResult = location.pathname.match(/^\/donation\/(success|fail)$/);
+if (donationResult) {
+  // 결과 화면에서 다른 화면으로 가면 앱의 기본 경로(/)로 돌아간다.
+  window.addEventListener('hashchange', () => { location.href = `/${location.hash}`; });
+  renderDonationResult(donationResult[1]);
+} else {
+  window.addEventListener('hashchange', route);
+  route();
+}
 
 function renderList(onLeave) {
   const root = mount('tpl-list');
@@ -156,6 +165,7 @@ async function renderDetail(id) {
       location.hash = '#/';
     },
   });
+  mountDonations(q(root, 'donations'), { targetType: 'broadcast', targetId: b.id, resource: b });
   mountComments(q(root, 'comments'), { targetType: 'broadcast', targetId: b.id });
 
   status.hidden = true;

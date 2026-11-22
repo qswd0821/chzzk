@@ -156,7 +156,7 @@ test('이전 단계에서 만든 DB도 데이터를 유지한 채 열리고, 그
   legacy.close();
 
   const reopened = openDatabase(legacyPath);
-  assert.equal(reopened.prepare('PRAGMA user_version').get().user_version, 3);
+  assert.equal(reopened.prepare('PRAGMA user_version').get().user_version, 4);
   const row = reopened.prepare('SELECT title, owner_id FROM broadcasts').get();
   assert.equal(row.title, '예전 방송');
   assert.equal(row.owner_id, null);

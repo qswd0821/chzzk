@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>모의 결제창 (테스트)</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <!-- 내장 모의 결제 서비스의 결제창. 토스 테스트 키가 없을 때만 열린다. 실제 결제가 아니다. (docs/adr/0002) -->
+  <main class="narrow mock-pay">
+    <p class="mock-badge">TEST · 모의 결제 서비스</p>
+    <h1>결제하기</h1>
+    <dl class="info">
+      <dt>주문명</dt><dd data-role="order-name"></dd>
+      <dt>결제 금액</dt><dd><strong data-role="amount"></strong></dd>
+      <dt>주문번호</dt><dd><code data-role="order-id"></code></dd>
+    </dl>
+    <p class="error" data-role="error" hidden></p>
+
+    <div class="mock-actions">
+      <button type="button" class="button donate" data-role="success">결제 성공</button>
+      <button type="button" class="button danger" data-role="fail">결제 실패 (카드사 거절)</button>
+      <button type="button" class="button secondary" data-role="cancel">결제 취소 (창 닫기)</button>
+    </div>
+
+    <details class="mock-tamper">
+      <summary>금액 변조 테스트</summary>
+      <p class="muted">서버가 화면 값을 믿지 않고 저장된 주문 금액과 비교하는지 확인합니다. 둘 중 하나라도 주문 금액과 다르면 후원이 확정되지 않아야 합니다.</p>
+      <label>결제창에서 실제로 결제할 금액 <input type="number" data-role="pay-amount"></label>
+      <label>성공 주소(successUrl)에 붙일 금액 <input type="number" data-role="redirect-amount"></label>
+    </details>
+  </main>
+  <script src="/mock-pay.js" type="module"></script>
+</body>
+</html>

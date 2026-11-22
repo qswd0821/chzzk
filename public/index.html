@@ -145,6 +145,61 @@
     </li>
   </template>
 
+  <!-- 후원: 합계·내역(공개)과 후원하기(회원). 확정은 서버가 결제 승인을 확인한 뒤에만 된다. -->
+  <template id="tpl-donations">
+    <section class="donations">
+      <div class="donation-head">
+        <h2>후원</h2>
+        <p class="donation-total"><strong data-role="total-amount">0원</strong> <span class="muted" data-role="total-count">0건</span></p>
+      </div>
+      <form data-role="form" novalidate hidden>
+        <div class="row amount-presets" data-role="presets"></div>
+        <label>후원 금액 (원) <span class="hint" data-role="amount-hint"></span>
+          <input name="amount" type="number" inputmode="numeric" required>
+        </label>
+        <label>후원 메시지 <span class="hint">선택, 100자 이하</span>
+          <input name="message" maxlength="100" placeholder="방송 잘 보고 있어요!">
+        </label>
+        <button type="submit" class="button donate">♥ 후원하기</button>
+        <p class="muted small" data-role="provider-note"></p>
+      </form>
+      <p class="muted" data-role="note" hidden></p>
+      <p class="error" data-role="error" hidden></p>
+      <ul class="donation-list" data-role="list"></ul>
+    </section>
+  </template>
+
+  <template id="tpl-donation-item">
+    <li class="donation-item">
+      <span class="donation-amount" data-role="amount"></span>
+      <strong data-role="donor"></strong>
+      <span class="muted" data-role="date"></span>
+      <p class="donation-message" data-role="message"></p>
+    </li>
+  </template>
+
+  <!-- 결제창에서 돌아온 화면 (/donation/success, /donation/fail) -->
+  <template id="tpl-donation-result">
+    <section class="narrow donation-result">
+      <h1 data-role="title">후원 확인 중…</h1>
+      <p data-role="message">결제 승인을 서버에서 확인하고 있습니다. 화면을 닫지 마세요.</p>
+      <dl class="info" data-role="details" hidden>
+        <dt>받는 소유자</dt><dd data-role="recipient"></dd>
+        <dt>금액</dt><dd data-role="amount"></dd>
+        <dt>메시지</dt><dd data-role="donation-message"></dd>
+        <dt>주문번호</dt><dd><code data-role="order-id"></code></dd>
+      </dl>
+      <div class="mock-tools" data-role="mock-tools" hidden>
+        <p class="muted">테스트: 결제 서비스가 같은 승인 통지(웹훅)를 반복해서 보내도 후원이 한 번만 적립되는지 확인합니다.</p>
+        <button type="button" class="button secondary" data-role="resend">승인 통지 3번 다시 보내기</button>
+        <pre class="mock-log" data-role="resend-log" hidden></pre>
+      </div>
+      <p class="row"><a class="button" data-role="back" href="/#/">방송으로 돌아가기</a></p>
+    </section>
+  </template>
+
+  <div class="toast-area" data-role="toasts" aria-live="polite"></div>
+
   <!-- 녹화방송 상세 + 플레이어 -->
   <template id="tpl-detail">
     <section>
@@ -161,6 +216,7 @@
           <dd><code data-role="location"></code></dd>
         </dl>
         <div data-role="owner-tools"></div>
+        <div data-role="donations"></div>
         <div data-role="comments"></div>
       </article>
     </section>
@@ -227,6 +283,7 @@
       </div>
       <p class="muted" data-role="message"></p>
       <p class="error" data-role="error" hidden></p>
+      <div data-role="donations"></div>
       <div data-role="comments"></div>
     </section>
   </template>
@@ -249,6 +306,7 @@
         <p class="muted" data-role="meta"></p>
         <p class="muted" data-role="message"></p>
         <div data-role="owner-tools"></div>
+        <div data-role="donations"></div>
         <div data-role="comments"></div>
       </article>
     </section>

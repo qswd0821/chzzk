@@ -4,7 +4,7 @@ import { isSameOrigin } from '../auth/session-cookie.js';
 
 export const SIGNALING_PATH = '/ws/lives';
 
-// WebRTC 시그널링 중계 + 라이브 댓글 실시간 전달.
+// WebRTC 시그널링 중계 + 라이브 댓글·후원 실시간 전달.
 // 영상은 송출자 ↔ 시청자 브라우저가 P2P로 직접 주고받고(docs/adr/0001),
 // 서버는 연결 협상 메시지(offer/answer/ice)와 댓글 변경 알림만 전달한다.
 //
@@ -16,8 +16,9 @@ export const SIGNALING_PATH = '/ws/lives';
 //   시청자 → { type: 'answer' | 'ice', sdp | candidate }                → 송출자에게 { from: viewerId, ... }
 //   서버 → 송출자 { type: 'viewer-joined' | 'viewer-left', viewerId }
 //   서버 → 모두   { type: 'comment', action: 'created' | 'updated' | 'deleted', comment }
+//   서버 → 모두   { type: 'donation', donation }   새로 확정된 후원(중복 통지로는 다시 오지 않는다)
 //   서버 → 모두   { type: 'ended' }  라이브 방송이 종료되면 보내고 연결을 닫는다.
-export function attachLiveSignaling({ server, service, comments, authenticate, heartbeatMs = 15_000 }) {
+export function attachLiveSignaling({ server, service, comments, donations, authenticate, heartbeatMs = 15_000 }) {
   const wss = new WebSocketServer({
     server,
     path: SIGNALING_PATH,
@@ -50,6 +51,13 @@ export function attachLiveSignaling({ server, service, comments, authenticate, h
     const room = rooms.get(comment.targetId);
     if (!room) return;
     for (const socket of everyoneIn(room)) send(socket, { type: 'comment', action, comment });
+  });
+
+  donations?.events.on('confirmed', (donation) => {
+    if (donation.targetType !== 'live') return;
+    const room = rooms.get(donation.targetId);
+    if (!room) return;
+    for (const socket of everyoneIn(room)) send(socket, { type: 'donation', donation });
   });
 
   wss.on('connection', (socket, req) => {

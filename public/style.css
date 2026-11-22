@@ -208,3 +208,41 @@ input[type=password] {
 @media (max-width: 480px) {
   .comments > form { flex-direction: column; align-items: stretch; }
 }
+
+/* 후원 */
+.button.donate { background: #e8a317; color: #1c1f24; }
+.donations { margin-top: 32px; padding: 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+.donation-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px; }
+.donation-head h2 { font-size: 1.15rem; margin: 0; }
+.donation-total { margin: 0; font-size: 1.05rem; }
+.donations form { margin-top: 12px; }
+.amount-presets { margin: 0; }
+.small { font-size: 0.8rem; margin: 0; }
+input[type=number] {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+.donation-list { list-style: none; padding: 0; margin: 16px 0 0; display: grid; gap: 8px; }
+.donation-item { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; padding: 8px 10px; border-radius: 8px; background: var(--bg); }
+.donation-amount { font-weight: 700; color: #c47f00; }
+.donation-message { flex-basis: 100%; margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.donation-result h1 { margin-top: 24px; }
+.mock-tools { margin: 16px 0; padding: 12px 16px; border: 1px dashed var(--border); border-radius: 12px; }
+.mock-log { white-space: pre-wrap; font-size: 0.85rem; background: var(--bg); padding: 8px; border-radius: 8px; }
+
+/* 라이브 후원 알림 */
+.toast-area { position: fixed; right: 16px; bottom: 16px; display: grid; gap: 8px; z-index: 10; max-width: min(360px, calc(100vw - 32px)); }
+.toast { padding: 12px 16px; border-radius: 12px; background: #e8a317; color: #1c1f24; box-shadow: 0 6px 20px #0004; }
+.toast p { margin: 4px 0 0; overflow-wrap: anywhere; }
+
+/* 모의 결제창 */
+.mock-pay { margin: 0 auto; padding: 24px 16px 64px; }
+.mock-badge { display: inline-block; padding: 2px 10px; border-radius: 999px; background: #e8a317; color: #1c1f24; font-weight: 700; font-size: 0.8rem; }
+.mock-actions { display: grid; gap: 10px; margin: 20px 0; }
+.mock-tamper { margin-top: 16px; }
+.mock-tamper label { margin-top: 8px; }

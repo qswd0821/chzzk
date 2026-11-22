@@ -1,16 +1,18 @@
 # 치지직
 
-누구나 **방송**을 보고, **회원**은 방송을 올리고 댓글을 다는 웹 서비스입니다.
+누구나 **방송**을 보고, **회원**은 방송을 올리고 댓글을 달고 방송 소유자에게 **후원**하는 웹 서비스입니다.
 
 - **녹화방송** (1단계): 영상 파일을 업로드하거나 이미 저장된 영상 URL을 연결해 등록하고, 목록 → 상세 화면에서 재생합니다.
 - **라이브 방송** (2단계): 휴대폰 브라우저에서 카메라·마이크로 라이브 방송을 시작·종료하고, 다른 화면에서 방송 목록 → 라이브 방송을 골라 실시간으로 시청합니다. 방송 중·종료 상태를 구분해 표시합니다.
 - **인증·인가와 댓글** (3단계): 회원가입·로그인·로그아웃, 방송 소유자만 할 수 있는 수정·삭제·송출 제어, 녹화방송과 라이브 방송의 댓글(라이브는 실시간), 작성자만 할 수 있는 댓글 수정·삭제. **모든 권한은 서버가 검사합니다.**
+- **후원** (4단계): 로그인한 회원이 방송을 보며 그 방송의 소유자에게 금액을 정해 후원합니다. **토스페이먼츠 테스트 모드**(키가 없으면 내장 모의 결제 서비스)로 결제하고, **서버가 결제 승인과 금액·받는 소유자를 확인한 뒤에만** 확정합니다. 같은 승인 통지가 반복돼도 한 번만 적립되며, 방송별 후원 내역과 합계를 보여줍니다(라이브는 실시간 알림).
 
 기술 구성:
 
 - 서버: Node.js + Express, 업로드는 multer, 라이브 시그널링·실시간 댓글은 WebSocket(`ws`)
 - 저장소: Node 내장 SQLite(`node:sqlite`): 별도 DB 설치나 네이티브 빌드가 필요 없습니다
 - 인증: 서버 세션 + `HttpOnly; SameSite=Lax` 쿠키, 비밀번호는 Node 내장 `scrypt` 해시
+- 결제: 토스페이먼츠 결제창(v2 SDK, API 개별 연동 테스트 키) + 승인 API·조회 API·웹훅. 키가 없으면 같은 흐름을 흉내 내는 내장 모의 결제 서비스 ([ADR 0002](docs/adr/0002-payment-provider-port-with-mock.md))
 - 화면: 빌드 단계 없는 정적 HTML/CSS/JS(해시 라우팅 SPA)
 - 라이브 송출: 브라우저 `getUserMedia`(카메라·마이크) + **WebRTC P2P**. 서버는 연결 협상 메시지만 중계합니다 ([ADR 0001](docs/adr/0001-webrtc-p2p-live-broadcast.md))
 - 용어: [GLOSSARY.md](GLOSSARY.md)
@@ -35,7 +37,8 @@ npm start
     같은 Wi-Fi 휴대폰에서: https://192.168.0.12:3000
   ```
 
-- 이전 단계에서 쓰던 `data/replay.db` 가 있으면 시작할 때 자동으로 스키마가 올라갑니다(마이그레이션 3). 기존 방송은 그대로 남고 **소유자 없음**으로 표시됩니다.
+- 이전 단계에서 쓰던 `data/replay.db` 가 있으면 시작할 때 자동으로 스키마가 올라갑니다(마이그레이션 3: 회원·댓글, 4: 후원). 기존 방송은 그대로 남고 **소유자 없음**으로 표시됩니다.
+- **후원 결제**: `.env` 에 토스 테스트 키가 없으면 내장 **모의 결제 서비스**로 동작하므로 바로 후원 흐름을 확인할 수 있습니다. 토스 테스트 결제창으로 확인하려면 [토스 테스트 모드로 실행](#토스-테스트-모드로-실행)을 보세요.
 
 개발 중에는 `npm run dev`(파일 변경 시 자동 재시작)를 쓸 수 있습니다.
 
@@ -48,7 +51,7 @@ npm test
 ## 환경변수
 
 `.env.example` 을 복사해 `.env` 로 사용합니다. `npm start` 가 `.env` 를 자동으로 읽습니다(Node `--env-file-if-exists`).
-이번 단계에서 추가로 필요한 비밀 값은 없습니다. 세션 토큰은 서버가 로그인할 때마다 무작위로 만들고, DB에는 해시만 저장합니다.
+세션 토큰은 서버가 로그인할 때마다 무작위로 만들고, DB에는 해시만 저장합니다. 비밀 값은 토스 **테스트** 시크릿 키뿐이며 `.env`(커밋되지 않음)에만 넣습니다.
 
 | 변수 | 기본값 | 설명 |
 | --- | --- | --- |
@@ -59,6 +62,9 @@ npm test
 | `HTTPS_KEY`, `HTTPS_CERT` | (비움) | 가진 인증서 파일 경로(PEM). 비워 두면 자체 서명 인증서를 자동 생성해 `DATA_DIR/tls/` 에 보관하고 재사용합니다 |
 | `STUN_URLS` | `stun:stun.l.google.com:19302` | WebRTC STUN 서버. 쉼표로 여러 개 |
 | `TURN_URL`, `TURN_USERNAME`, `TURN_CREDENTIAL` | (비움) | 휴대폰 LTE ↔ PC Wi-Fi 처럼 서로 다른 네트워크에서 연결이 안 될 때 쓰는 TURN 서버 |
+| `PAYMENT_PROVIDER` | `auto` | 후원 결제 서비스. `auto` = 토스 테스트 키가 둘 다 있으면 `toss`, 없으면 `mock`(내장 모의 결제). `toss` 로 고정하면 키가 없을 때 서버가 시작하지 않습니다 |
+| `TOSS_CLIENT_KEY` | (비움) | 토스페이먼츠 **API 개별 연동** 테스트 클라이언트 키(`test_ck_…`). 브라우저 결제창에 쓰는 공개 키 |
+| `TOSS_SECRET_KEY` | (비움) | 토스페이먼츠 테스트 시크릿 키(`test_sk_…`). 서버에서 승인·조회 API 호출에만 쓰며 브라우저로 보내지 않습니다. `live_` 키는 서버가 거부합니다 |
 
 ```dotenv
 PORT=3000
@@ -72,6 +78,10 @@ STUN_URLS=stun:stun.l.google.com:19302
 TURN_URL=turn:turn.example.com:3478
 TURN_USERNAME=example-user
 TURN_CREDENTIAL=example-password
+PAYMENT_PROVIDER=auto
+# 예시 형식입니다. 토스 개발자센터에서 받은 본인의 테스트 키를 넣으세요(커밋 금지).
+TOSS_CLIENT_KEY=test_ck_xxxxxxxxxxxxxxxxxxxxxxxx
+TOSS_SECRET_KEY=test_sk_xxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
 ## 공개 범위와 권한
@@ -86,11 +96,15 @@ TURN_CREDENTIAL=example-password
 | 녹화방송 수정(제목·설명)·삭제 | ❌ 401 | ❌ 403 | ✅ 소유자 |
 | 라이브 송출(WebSocket 송출자 참여)·종료·제목 수정·삭제 | ❌ 401 | ❌ 403 | ✅ 소유자 |
 | 댓글 수정·삭제 | ❌ 401 | ❌ 403 (방송 소유자도 불가) | ✅ 작성자 |
+| 방송별 후원 내역·합계 (확정된 후원만) | ✅ 공개 | ✅ | ✅ |
+| 후원하기(후원 주문 생성) | ❌ 401 | ✅ (소유자 없는 방송은 400) | ❌ 403 (자기 방송) |
+| 후원 주문 확정·실패 기록 | ❌ 401 | ❌ 403 (남의 주문) | ✅ 그 주문의 후원자 |
 
 - **시청을 공개로 둔 이유**: 방송은 많은 사람이 보는 것이 목적이고, 1·2단계부터 누구나 볼 수 있었습니다. 대신 서비스에 무언가를 남기는 행위(등록·송출·댓글)는 누가 했는지 알아야 하므로 로그인을 요구합니다.
 - **소유자 없음**: 회원 제도 이전(1·2단계)에 만든 방송은 소유자가 없습니다. 시청과 댓글은 되지만 **누구도 수정·삭제할 수 없습니다**(403).
 - 한 회원은 동시에 하나의 라이브만 **방송 중**일 수 있습니다(두 번째 시작은 409).
 - 다른 회원의 라이브에 송출자로 참여하려 하면 WebSocket이 "방송 소유자만 송출할 수 있습니다"로 거절됩니다. 시청자 참여는 비로그인도 됩니다.
+- **후원 내역을 공개로 둔 이유**: 방송 화면에서 누가 얼마를 후원했는지 함께 보는 것이 후원의 일부이기 때문입니다. 확정된 후원만 보이고, 결제 대기·실패·취소·만료 주문과 결제키는 공개 응답에 나오지 않습니다.
 
 ### 보안 처리
 
@@ -98,7 +112,8 @@ TURN_CREDENTIAL=example-password
 - **세션**: 로그인하면 32바이트 무작위 토큰을 `HttpOnly`(스크립트에서 읽을 수 없음), `SameSite=Lax` 쿠키로 줍니다. DB에는 토큰의 SHA-256 해시만 저장하며 7일 후 만료됩니다. 로그아웃하면 서버의 세션을 지우므로 같은 토큰은 즉시 무효가 됩니다.
 - **CSRF**: `SameSite=Lax` 에 더해, 상태를 바꾸는 API 요청과 WebSocket 연결에 다른 출처의 `Origin` 이 붙어 있으면 거절합니다(403).
 - **업로드**: 비로그인 요청은 업로드 파일을 디스크에 쓰기 전에 401로 거절합니다.
-- **화면 출력**: 사용자 입력(제목·댓글·닉네임)은 모두 `textContent` 로 넣어 HTML로 해석되지 않습니다.
+- **화면 출력**: 사용자 입력(제목·댓글·닉네임·후원 메시지)은 모두 `textContent` 로 넣어 HTML로 해석되지 않습니다.
+- **결제**: 토스 시크릿 키는 서버에만 있고, 브라우저에는 클라이언트 키만 내려갑니다. `live_` 키는 설정 단계에서 거부합니다. 모의 결제 서비스(`/mock-pg`, `/mock-pay.html`)는 토스 모드에서는 404 로 닫힙니다.
 
 ## 구현 범위
 
@@ -106,11 +121,16 @@ TURN_CREDENTIAL=example-password
 
 | 체크리스트 | 서버 | 화면 |
 | --- | --- | --- |
-| 녹화방송과 휴대폰 라이브 송출·시청 유지 | 녹화방송 [src/broadcasts/](src/broadcasts/), 라이브 [src/lives/](src/lives/) (WebRTC 시그널링 [live.signaling.js](src/lives/live.signaling.js)) | [public/app.js](public/app.js) 목록·등록·상세, [public/live.js](public/live.js) 송출·시청 |
+| 녹화방송과 휴대폰 라이브 송출·시청 유지 (1·2단계) | 녹화방송 [src/broadcasts/](src/broadcasts/), 라이브 [src/lives/](src/lives/) (WebRTC 시그널링 [live.signaling.js](src/lives/live.signaling.js)) | [public/app.js](public/app.js) 목록·등록·상세, [public/live.js](public/live.js) 송출·시청 |
 | 회원가입·로그인·로그아웃과 인증 상태 관리 | `POST /api/auth/signup`·`/login`·`/logout`, `GET /api/auth/me` — [auth.router.js](src/auth/auth.router.js) → [auth.service.js](src/auth/auth.service.js), 비밀번호 [password.js](src/auth/password.js), 세션 저장 [member.repository.js](src/auth/member.repository.js), 쿠키·`req.member` [session-cookie.js](src/auth/session-cookie.js) | 로그인·가입 `#/login`·`#/signup` — [public/auth.js](public/auth.js), 헤더 로그인 상태 [public/common.js](public/common.js) `refreshSession`/`renderAuthArea` |
 | 서버에서 소유자·인증 상태를 검사해 방송 관리·송출 제어 제한 | 권한 규칙 [src/auth/access.js](src/auth/access.js) (`requireMember`/`requireOwner`), 적용: [broadcast.service.js](src/broadcasts/broadcast.service.js) `register`/`update`/`remove`, [live.service.js](src/lives/live.service.js) `start`/`end`/`rename`/`remove`/`canBroadcast`, 송출자 WebSocket 참여 [live.signaling.js](src/lives/live.signaling.js) `join` | 소유자에게만 수정·삭제·종료 버튼 [public/owner-tools.js](public/owner-tools.js) (편의용, 실제 검사는 서버) |
 | 방송별 댓글 저장·조회와 로그인 작성자 연결 | `GET/POST /api/broadcasts/:id/comments`, `GET/POST /api/lives/:id/comments` — [comment.router.js](src/comments/comment.router.js) → [comment.service.js](src/comments/comment.service.js) → [comment.repository.js](src/comments/comment.repository.js) (`comments.author_id`), 라이브 댓글 실시간 전달 [live.signaling.js](src/lives/live.signaling.js) | 댓글 영역 [public/comments.js](public/comments.js) (녹화방송 상세, 라이브 시청·송출 화면) |
 | 서버에서 비로그인 댓글 작성 거절, 작성자만 수정·삭제 | [comment.service.js](src/comments/comment.service.js) `create`(`requireMember` → 401), `update`/`remove`(`requireAuthor` → 401/403), `PATCH/DELETE /api/comments/:id` | 작성자에게만 수정·삭제 버튼 |
+| **3단계 인증·인가·댓글 유지** | 인증·권한 [src/auth/](src/auth/), 댓글 [src/comments/](src/comments/) (위 3단계 행 참고) | [public/auth.js](public/auth.js), [public/comments.js](public/comments.js) |
+| **로그인 회원의 후원 대상·금액 선택과 테스트 결제 요청** | `POST /api/donations/orders` — [donation.router.js](src/donations/donation.router.js) → [donation.service.js](src/donations/donation.service.js) `createOrder` (회원 확인, 받는 소유자 = 방송 소유자, 금액 1,000~500,000원·1,000원 단위 검증, 주문 저장) | 방송 화면의 후원 영역 [public/donations.js](public/donations.js) `mountDonations`(금액 빠른 선택·직접 입력·메시지) → `openPaymentWindow`: 토스 결제창(`TossPayments(clientKey).payment().requestPayment`) 또는 모의 결제창 [public/mock-pay.html](public/mock-pay.html) |
+| **서버에서 결제 승인·금액·수신 대상을 검증한 뒤 확정** | `POST /api/donations/confirm` — `donation.service.js` `confirm` → 결제 서비스 승인 API([toss.js](src/donations/providers/toss.js) `POST /v1/payments/confirm`) → `finalize`: `status=DONE`, 승인 금액 = 저장된 주문 금액, 주문번호 일치, 받는 회원 = 지금의 방송 소유자를 모두 확인한 뒤에만 확정 | 결과 화면 `/donation/success` — `renderDonationResult`: 서버가 확정했다고 응답한 뒤에만 "후원 완료" 표시 |
+| **같은 결제 건의 중복 확정 방지 코드와 저장 구조** | [src/database.js](src/database.js) 마이그레이션 4: `donations.order_id UNIQUE`, `donations.payment_key UNIQUE`, `CHECK (status <> 'done' OR payment_key IS NOT NULL)`. [donation.repository.js](src/donations/donation.repository.js) `markConfirmed`: `UPDATE … WHERE status = 'pending'` 조건부 갱신(한 번만 성공). 웹훅 `POST /api/donations/webhook` → `handleWebhook`: 결제 서비스에 다시 조회 후 같은 `finalize` → 이미 확정이면 `duplicate` | 결과 화면 새로고침 시 "이미 확정된 후원", 모의 결제의 "승인 통지 3번 다시 보내기" |
+| **방송별 후원 내역과 합계 조회·표시** | `GET /api/broadcasts/:id/donations`, `GET /api/lives/:id/donations` → `listFor` (확정된 후원만, `SUM`·`COUNT`), 라이브 새 확정 후원은 WebSocket `donation` 메시지 | 녹화방송 상세·라이브 시청·라이브 송출 화면의 후원 영역(합계, 후원자·금액·메시지·시각), 라이브 후원 알림 `showDonationToast` |
 | README | 이 문서 | — |
 
 ### 녹화방송 (1단계 + 3단계)
@@ -139,6 +159,32 @@ TURN_CREDENTIAL=example-password
 - 수정·삭제는 **작성자만** 할 수 있습니다. 방송 소유자라도 남의 댓글은 고치거나 지울 수 없습니다. 수정한 댓글에는 "(수정됨)"이 붙습니다.
 - **라이브 댓글은 실시간**: 작성·수정·삭제가 그 라이브에 연결된 모든 시청자와 송출자(휴대폰 송출 화면 포함)에게 WebSocket으로 즉시 전달됩니다. 녹화방송 댓글은 내가 쓴 것만 바로 반영되고, 새로고침하면 다른 사람 댓글이 보입니다.
 
+### 후원 (4단계)
+
+**흐름** (토스와 모의 결제가 같습니다)
+
+1. **후원 주문**: 방송 화면에서 금액(1,000~500,000원, 1,000원 단위)과 메시지(선택, 100자)를 정해 `♥ 후원하기` → `POST /api/donations/orders`. 서버가 로그인 회원인지, 받는 회원(= 방송 소유자)이 있는지, 자기 방송이 아닌지, 금액이 맞는지 확인하고 **주문번호·금액·받는 회원·방송·후원자를 저장**합니다(상태 `pending`, 결제 대기).
+2. **결제 요청**: 브라우저가 결제창을 엽니다. 토스: `TossPayments(clientKey).payment({ customerKey }).requestPayment({ method: 'CARD', amount: { currency: 'KRW', value }, orderId, orderName, successUrl, failUrl })`. 모의: `/mock-pay.html`.
+3. **결과 리다이렉트**: 성공이면 `/donation/success?paymentKey&orderId&amount`, 실패·취소면 `/donation/fail?code&message(&orderId)`.
+4. **승인 확인 → 확정**(서버, `POST /api/donations/confirm`):
+   - 주문이 이 로그인 회원의 것인지, 결제 대기 상태인지, 30분이 지나지 않았는지
+   - 리다이렉트로 온 `amount` 가 **서버에 저장된 주문 금액**과 같은지(다르면 결제 서비스에 승인 요청조차 하지 않고 실패 처리)
+   - 받는 회원이 **지금도** 그 방송의 소유자인지(방송 삭제·소유자 변경이면 실패)
+   - 결제 서비스 승인 API를 **저장된 주문 금액으로** 호출하고, 응답의 `status === 'DONE'`, `totalAmount === 주문 금액`, `orderId` 일치를 확인
+   - 모두 통과하면 `UPDATE donations SET status='done' … WHERE order_id=? AND status='pending'` 으로 **한 번만** 확정
+5. 화면은 서버가 확정했다고 응답한 뒤에만 "♥ 후원 완료"를 보여줍니다.
+
+**같은 승인 통지가 반복될 때**: 승인 통지는 두 경로로 옵니다. (1) 브라우저의 성공 리다이렉트 → `/api/donations/confirm`(새로고침·뒤로 가기로 반복될 수 있음), (2) 결제 서비스의 `PAYMENT_STATUS_CHANGED` 웹훅 → `/api/donations/webhook`(토스는 200을 못 받으면 최대 7회 재전송). 두 경로 모두 같은 `finalize` 로 들어갑니다.
+
+- 웹훅 본문은 믿지 않고 `paymentKey` 로 결제 서비스에 실제 상태를 **다시 조회**한 뒤 검증합니다(위조된 웹훅은 `ignored`).
+- 이미 확정된 주문이면 `duplicate` 로 응답하고 적립하지 않습니다. 결제 서비스가 재전송을 멈추도록 처리·중복·무시 모두 200 으로 응답합니다.
+- 토스가 승인 재요청에 `ALREADY_PROCESSED_PAYMENT` 를 주면(웹훅이 먼저 확정한 경우 등) 조회 API로 `DONE` 인지 확인하고 같은 검증을 거칩니다.
+- 저장 구조로도 막습니다: `order_id UNIQUE`(주문당 한 행), `payment_key UNIQUE`(한 결제가 두 주문에 쓰이지 않음), 조건부 UPDATE(동시에 두 통지가 와도 하나만 `changes = 1`).
+
+**실패·취소·만료**: failUrl 의 `code` 가 `PAY_PROCESS_CANCELED`(사용자가 결제창을 닫음)이면 **취소**, 그 밖(`REJECT_CARD_COMPANY` 등)은 **실패**로 기록합니다. 토스는 취소 때 `orderId` 를 주지 않으므로, 주문을 만들 때 브라우저 sessionStorage 에 주문번호를 기억해 둡니다. 결제창에서 돌아오지 않은 결제 대기 주문은 30분 뒤 확정할 수 없습니다(**만료**). 실패·취소·만료 주문은 다시 확정할 수 없고(409) 내역·합계에 들어가지 않습니다.
+
+**라이브**: 라이브 방송에 새로 확정된 후원은 연결된 시청자·송출자(휴대폰 송출 화면 포함)에게 WebSocket으로 한 번만 알림이 갑니다(중복 통지로는 다시 오지 않음).
+
 ### API
 
 | 메서드 | 경로 | 권한 | 설명 |
@@ -164,17 +210,34 @@ TURN_CREDENTIAL=example-password
 | `POST` | `/api/broadcasts/:id/comments`, `/api/lives/:id/comments` | 회원 | JSON `{ body }` → 201 |
 | `PATCH` | `/api/comments/:id` | 작성자 | JSON `{ body }` |
 | `DELETE` | `/api/comments/:id` | 작성자 | 204 |
-| WS | `/ws/lives` | 시청자: 공개, 송출자: 소유자 | 첫 메시지 `{type:'join', role:'broadcaster'\|'viewer', liveId}` 후 `offer`/`answer`/`ice` 중계. 서버가 `viewer-joined`/`viewer-left`/`comment`/`ended` 통지 |
+| WS | `/ws/lives` | 시청자: 공개, 송출자: 소유자 | 첫 메시지 `{type:'join', role:'broadcaster'\|'viewer', liveId}` 후 `offer`/`answer`/`ice` 중계. 서버가 `viewer-joined`/`viewer-left`/`comment`/`donation`/`ended` 통지 |
+| `GET` | `/api/donations/config` | 공개 | 결제 서비스 종류(`toss`/`mock`), 토스 클라이언트 키, 금액 범위 |
+| `POST` | `/api/donations/orders` | 회원 | JSON `{ targetType: 'broadcast' 또는 'live', targetId, amount, message? }` → 201 `{ orderId, amount, orderName, customerKey, payment }` |
+| `POST` | `/api/donations/confirm` | 주문의 후원자 | JSON `{ orderId, paymentKey, amount }` → 200 `{ donation, alreadyConfirmed }`. 금액 불일치 400, 결제 거절 402, 만료·이미 실패 409 |
+| `POST` | `/api/donations/orders/:orderId/fail` | 주문의 후원자 | JSON `{ code, message }`. `PAY_PROCESS_CANCELED` → 취소, 그 외 → 실패 |
+| `POST` | `/api/donations/webhook` | 결제 서비스 | `{ eventType: 'PAYMENT_STATUS_CHANGED', data: { paymentKey, … } }` → 200 `{ result: confirmed / duplicate / ignored / rejected }` |
+| `GET` | `/api/broadcasts/:id/donations`, `/api/lives/:id/donations` | 공개 | `{ total: { amount, count }, donations: [...] }` (확정된 후원만, 최근 순) |
+| `POST` | `/mock-pg/payments` | 모의 결제창 | (모의 결제일 때만) 결제창 '성공' — 결제(READY) 생성 |
+| `POST` | `/mock-pg/payments/:paymentKey/webhook-resend?times=3` | 테스트 | (모의 결제일 때만) 같은 승인 웹훅을 여러 번 다시 보냄 |
 
 오류 응답은 모두 `{ "error": "한국어 메시지" }` 형식입니다. 401 = 로그인 필요, 403 = 권한 없음(소유자·작성자 아님, 다른 출처 요청), 404 = 없음, 409 = 상태 충돌.
 
 ### 제외 (이번 단계 범위 밖)
 
-- 도네이션: 다음 단계
+- 후원 환불·결제 취소(확정 후), 받는 회원의 정산·출금, 익명 후원, 회원별 "내 후원 내역" 화면
+- 토스 웹훅 서명(`tosspayments-webhook-signature`) 검증: 대신 웹훅 본문을 믿지 않고 결제 조회 API로 다시 확인합니다
+- 실제 금전 결제: 토스 `live_` 키는 서버가 거부합니다
 - 비밀번호 찾기·변경, 이메일 인증, 회원 탈퇴, 소셜 로그인
 - 방송 소유자의 댓글 관리(남의 댓글 삭제) 권한, 관리자 역할
 - 로그인 시도 횟수 제한·요청 속도 제한: 공개 서비스로 운영하기 전에 추가가 필요합니다
 - 라이브 방송 녹화, 대규모 시청(P2P 구조라 한 방송의 동시 시청자는 약 5~10명이 현실적인 한계, [ADR 0001](docs/adr/0001-webrtc-p2p-live-broadcast.md))
+
+### 토스 테스트 모드로 실행
+
+1. [토스페이먼츠 개발자센터](https://developers.tosspayments.com)에 가입(계약 불필요)하고 `API 키` 메뉴에서 **API 개별 연동 키**의 테스트 클라이언트 키(`test_ck_…`)와 테스트 시크릿 키(`test_sk_…`)를 확인합니다. 결제위젯 키(`test_gck_…`/`test_gsk_…`)는 이 결제창 방식과 맞지 않습니다.
+2. `.env` 에 `TOSS_CLIENT_KEY`, `TOSS_SECRET_KEY` 를 넣고 `npm start`. 후원 영역에 "토스페이먼츠 테스트 결제창으로 이동합니다"가 보이면 토스 모드입니다.
+3. 후원하기 → 토스 테스트 결제창에서 결제수단을 고르고 진행하면 `/donation/success` 로 돌아와 서버가 승인 API를 호출합니다. 테스트 키라 **실제로 돈이 빠져나가지 않습니다.** 결제창을 닫으면 `PAY_PROCESS_CANCELED` 로 취소 화면이 나옵니다.
+4. 웹훅까지 확인하려면 서버를 공개 주소로 열어야 합니다(토스는 로컬 포트 주소를 웹훅으로 등록할 수 없음). 예: `ngrok http 3000` → 개발자센터 `웹훅` 메뉴에 `https://<ngrok 주소>/api/donations/webhook` 를 `PAYMENT_STATUS_CHANGED` 로 등록. 결제 승인 직후 토스가 보내는 웹훅이 리다이렉트 확정과 겹치는 **실제 중복 통지**가 되고, 응답은 `duplicate` 입니다. 웹훅 전송 기록은 개발자센터에서 볼 수 있습니다.
 
 ## 휴대폰 연결과 권한
 
@@ -246,18 +309,44 @@ TURN_CREDENTIAL=example-password
 17. C의 댓글에는 C에게만 `수정`·`삭제` 가 보입니다. C가 수정하면 "(수정됨)"이 붙고 모든 화면에 반영됩니다. B(방송 소유자)도 C의 댓글은 수정·삭제할 수 없습니다(콘솔에서 `PATCH /api/comments/<id>` → 403).
 18. 녹화방송 상세에서도 같은 방식으로 댓글 작성(회원)과 작성자 권한을 확인합니다.
 
-### 6. 영속 저장
+### 6. 후원: 테스트 결제 성공·실패·취소, 승인 통지 중복 (A, B, C)
 
-19. 서버를 `Ctrl+C` 로 종료 후 다시 `npm start`. 방송·회원·댓글이 그대로 남고, 로그인 상태도 유지됩니다(세션 7일). 방송 중이던 라이브는 종료로 바뀝니다.
+`.env` 에 토스 키가 없으면 **모의 결제창**, 있으면 **토스 테스트 결제창**이 열립니다. 아래는 모의 결제 기준이고, 토스에서도 같은 결과 화면과 서버 동작을 확인할 수 있습니다.
+
+19. **후원 영역 확인**: B가 등록한 녹화방송을 엽니다.
+    - A(비로그인): 합계와 내역은 보이고, 후원 입력칸 대신 "로그인하면 … 후원할 수 있습니다"가 표시됩니다. 콘솔에서 `await fetch('/api/donations/orders', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({targetType:'broadcast', targetId:<id>, amount:5000})}).then(r => r.status)` → **401**
+    - B(소유자): "자기 방송에는 후원할 수 없습니다" 안내. 같은 요청 → **403**
+    - 소유자 없는 이전 단계 방송: "소유자가 없는 방송에는 후원할 수 없습니다"(→ 400)
+20. **결제 성공**: C로 `10,000원` 선택, 메시지 `첫 후원입니다!` → `♥ 후원하기` → 모의 결제창에서 `결제 성공` → `/donation/success` 에서 "후원 확인 중…" 뒤 **"♥ 후원 완료"**, 받는 소유자·금액·메시지가 표시됩니다. `방송으로 돌아가기` → 후원 합계 **10,000원 1건**, 내역에 C의 닉네임·금액·메시지·시각.
+21. **승인 통지 중복**:
+    - 성공 화면에서 `승인 통지 3번 다시 보내기` → 로그에 `통지 1~3: duplicate — 이미 확정된 후원 — 다시 적립하지 않음`, `후원 합계: 10,000원 (1건) → 10,000원 (1건)`
+    - 성공 화면을 **새로고침**(같은 승인 요청 재전송) → "이미 확정된 후원입니다. 같은 결제는 한 번만 적립됩니다."
+    - 웹훅 주소로 직접 반복(`<paymentKey>` 는 성공 화면 주소창의 값):
+
+      ```bash
+      curl -X POST http://localhost:3000/api/donations/webhook -H "Content-Type: application/json" -d "{\"eventType\":\"PAYMENT_STATUS_CHANGED\",\"data\":{\"paymentKey\":\"<paymentKey>\"}}"
+      ```
+
+      몇 번을 보내도 `{"result":"duplicate",…}` 이고 합계는 그대로입니다. 없는 `paymentKey` 로 보내면 `ignored` 입니다.
+22. **결제 실패**: C로 다시 후원 → 모의 결제창 `결제 실패 (카드사 거절)` → "후원 결제에 실패했습니다 … (REJECT_CARD_COMPANY) 후원은 적립되지 않았습니다." 합계 변화 없음.
+23. **결제 취소**: C로 다시 후원 → `결제 취소 (창 닫기)` → "후원을 취소했습니다 … (PAY_PROCESS_CANCELED)". 합계 변화 없음. 토스 결제창에서는 창을 닫으면 같은 결과입니다.
+24. **금액 변조**(선택): 모의 결제창의 `금액 변조 테스트` 를 펼쳐 50,000원 주문의 결제 금액·성공 주소 금액을 1,000으로 바꾸고 `결제 성공` → "후원을 확정하지 못했습니다 — 결제 금액이 후원 주문 금액과 다릅니다". 합계 변화 없음.
+25. **라이브 후원 알림**: B가 라이브를 송출하고 C가 시청하며 후원하면, **휴대폰 송출 화면과 다른 시청 화면에 "○○님 10,000원 후원!" 알림**이 뜨고 라이브의 후원 합계가 올라갑니다. 승인 통지를 다시 보내도 알림은 다시 뜨지 않습니다.
+
+### 7. 영속 저장
+
+26. 서버를 `Ctrl+C` 로 종료 후 다시 `npm start`. 방송·회원·댓글·후원 내역과 합계가 그대로 남고, 로그인 상태도 유지됩니다(세션 7일). 방송 중이던 라이브는 종료로 바뀝니다.
 
 ### 자동 테스트
 
-`npm test` 는 임시 디렉터리에서 서버를 띄워 38개 시나리오를 확인합니다.
+`npm test` 는 임시 디렉터리에서 서버를 띄워 56개 시나리오를 확인합니다.
 
 - 인증([test/auth.test.js](test/auth.test.js)): 가입 즉시 로그인, HttpOnly·SameSite 쿠키, scrypt 해시 저장, 입력 검증·중복 409, 로그인 실패 메시지 동일, 로그아웃 후 같은 토큰 무효, 세션 토큰 해시 저장, 만료
 - 녹화방송([test/broadcasts.test.js](test/broadcasts.test.js)): 1단계 기능, 비로그인 등록 401(파일 미저장), 수정·삭제 401/403/200, 삭제 시 파일·댓글 정리, 다른 출처 요청 403, 재시작 후 유지, 이전 DB 마이그레이션·소유자 없는 방송 관리 불가
 - 라이브([test/lives.test.js](test/lives.test.js)): 시작 401, 동시 방송 409, 종료·수정·삭제 401/403/200, 비로그인·다른 회원의 송출자 참여 거절, 시그널링 중계, 라이브 댓글 실시간 전달, 다른 출처 WebSocket 거절, 재시작
 - 댓글([test/comments.test.js](test/comments.test.js)): 비로그인 작성 401, 작성자 연결, 공개 목록·방송별 분리, 검증, 수정·삭제 401/403(방송 소유자 포함)/200, 종료된 라이브 댓글, 재시작 후 유지
+- 후원([test/donations.test.js](test/donations.test.js), 모의 결제): 공개 설정에 비밀 없음, 주문 401·자기 방송 403·소유자 없음·금액 범위·메시지 길이, 성공 확정과 내역·합계, **승인 재요청 3회·자동 웹훅·웹훅 재전송 5회·웹훅 직접 3회에도 1회 적립**, 위조 웹훅(없는 결제·READY 결제) 무시, 리다이렉트·결제창 금액 변조 거절, 남의 주문 401/403, 실패·취소 후 확정 불가, 30분 만료, 주문 후 방송 삭제 시 확정 거절, `order_id`·`payment_key` UNIQUE, 라이브 실시간 후원 알림 1회, 재시작 후 유지
+- 토스 어댑터([test/toss.test.js](test/toss.test.js), 가짜 토스 API 서버): 클라이언트 키만 공개·모의 결제 경로 닫힘, 승인 API 호출 형식(Basic 인증·저장된 금액), 웹훅 선도착 후 `ALREADY_PROCESSED_PAYMENT` 에도 1회 적립, 카드사 거절 시 실패 기록, `live_` 키 거부
 
 ## 디렉터리 구조
 
@@ -281,10 +370,19 @@ chzzk/
 │  │  └─ access.js              # 권한 규칙: requireMember / requireOwner / requireAuthor
 │  ├─ broadcasts/               # 녹화방송 (1단계, 3단계 소유자 권한)
 │  ├─ lives/                    # 라이브 방송 (2단계, 3단계 소유자 권한·실시간 댓글)
-│  └─ comments/                 # 댓글 (3단계)
-│     ├─ comment.router.js      # 방송별 댓글 조회·작성, 댓글 수정·삭제
-│     ├─ comment.service.js     # 작성(회원)·수정·삭제(작성자) 규칙, 변경 이벤트
-│     └─ comment.repository.js  # comments 테이블 SQL
+│  ├─ comments/                 # 댓글 (3단계)
+│  │  ├─ comment.router.js      # 방송별 댓글 조회·작성, 댓글 수정·삭제
+│  │  ├─ comment.service.js     # 작성(회원)·수정·삭제(작성자) 규칙, 변경 이벤트
+│  │  └─ comment.repository.js  # comments 테이블 SQL
+│  └─ donations/                # 후원 (4단계)
+│     ├─ donation.router.js     # 주문·확정·실패·웹훅, 방송별 내역·합계
+│     ├─ donation.service.js    # 주문 검증, 승인 확인·확정(finalize), 중복 통지 처리, 만료
+│     ├─ donation.repository.js # donations 테이블 SQL (조건부 확정 UPDATE)
+│     └─ providers/             # 결제 서비스 포트
+│        ├─ toss.js             # 토스페이먼츠 테스트 모드: 승인·조회 API
+│        ├─ mock.js             # 내장 모의 결제 서비스(결제창 API, 자동 웹훅, 웹훅 재전송)
+│        ├─ provider-error.js   # 결제 서비스 오류·결제 정보 모양
+│        └─ index.js            # 설정에 따라 어댑터 선택
 ├─ public/
 │  ├─ index.html                # 화면 템플릿
 │  ├─ app.js                    # 라우팅, 방송 목록, 녹화방송 화면
@@ -292,9 +390,11 @@ chzzk/
 │  ├─ live.js                   # 라이브 송출·시청 화면(getUserMedia, WebRTC)
 │  ├─ comments.js               # 댓글 영역
 │  ├─ owner-tools.js            # 소유자 수정·삭제 영역
+│  ├─ donations.js              # 후원 영역, 결제창 열기, 결제 결과 화면, 라이브 후원 알림
+│  ├─ mock-pay.html, mock-pay.js # 모의 결제창 (토스 키가 없을 때만)
 │  ├─ common.js                 # 공통 도우미, 로그인 상태
 │  └─ style.css
-├─ test/                        # node:test (auth, broadcasts, lives, comments)
+├─ test/                        # node:test (auth, broadcasts, lives, comments, donations, toss)
 ├─ docs/adr/                    # 설계 결정 기록
 ├─ GLOSSARY.md                  # 도메인 용어
 ├─ data/                        # (실행 시 생성) replay.db, uploads/, tls/
@@ -306,5 +406,5 @@ HTTP 라우터든 WebSocket이든 어느 경로로 들어와도 같은 규칙이
 
 ### 다음 단계로 확장할 때
 
-- **새 기능**(도네이션 등): `src/<기능>/` 에 router·service·repository 를 같은 모양으로 만들고 [src/app.js](src/app.js) 에서 연결합니다. 회원은 `req.member`, 권한은 `access.js` 를 그대로 씁니다. 라이브 중 실시간 알림은 댓글처럼 서비스 이벤트를 [live.signaling.js](src/lives/live.signaling.js) 가 방에 전달하면 됩니다.
+- **새 기능**: `src/<기능>/` 에 router·service·repository 를 같은 모양으로 만들고 [src/app.js](src/app.js) 에서 연결합니다. 회원은 `req.member`, 권한은 `access.js` 를 그대로 씁니다. 라이브 중 실시간 알림은 댓글처럼 서비스 이벤트를 [live.signaling.js](src/lives/live.signaling.js) 가 방에 전달하면 됩니다.
 - **테이블 추가·변경**: [src/database.js](src/database.js) 의 `MIGRATIONS` 배열 끝에 SQL을 추가합니다. 이미 적용된 항목은 다시 실행되지 않으므로 기존 데이터가 유지됩니다.

@@ -5,6 +5,7 @@
 import { api, mount, q, showError, formatDate, showLoginRequired, ownerName, isMine } from './common.js';
 import { mountComments } from './comments.js';
 import { mountOwnerTools } from './owner-tools.js';
+import { mountDonations, showDonationToast } from './donations.js';
 
 const signalingUrl = () => `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/lives`;
 
@@ -33,6 +34,7 @@ export function renderGoLive(onLeave) {
   let facingMode = 'user';
   let session = null; // 송출 중일 때의 { live, socket, peers }
   let liveComments = null;
+  let liveDonations = null;
 
   async function openCamera() {
     errorBox.hidden = true;
@@ -84,6 +86,7 @@ export function renderGoLive(onLeave) {
         api('/api/lives/rtc-config'),
       ]);
       session = startBroadcast({ live, rtcConfig });
+      liveDonations = mountDonations(q(root, 'donations'), { targetType: 'live', targetId: live.id, resource: live });
       liveComments = mountComments(q(root, 'comments'), { targetType: 'live', targetId: live.id });
       form.hidden = true;
       q(root, 'controls').hidden = false;
@@ -149,6 +152,9 @@ export function renderGoLive(onLeave) {
         updateViewers();
       } else if (msg.type === 'comment') {
         liveComments?.apply(msg.action, msg.comment);
+      } else if (msg.type === 'donation') {
+        liveDonations?.apply(msg.donation);
+        showDonationToast(msg.donation);
       } else if (msg.type === 'ended') {
         finish('방송이 종료되었습니다.');
       } else if (msg.type === 'error') {
@@ -281,6 +287,7 @@ export async function renderWatchLive(id, onLeave) {
       }
     });
   }
+  const liveDonations = mountDonations(q(root, 'donations'), { targetType: 'live', targetId: live.id, resource: live });
   const liveComments = mountComments(q(root, 'comments'), { targetType: 'live', targetId: live.id });
 
   const unmute = q(root, 'unmute');
@@ -337,6 +344,9 @@ export async function renderWatchLive(id, onLeave) {
       else pendingCandidates.push(msg.candidate);
     } else if (msg.type === 'comment') {
       liveComments.apply(msg.action, msg.comment);
+    } else if (msg.type === 'donation') {
+      liveDonations.apply(msg.donation);
+      showDonationToast(msg.donation);
     } else if (msg.type === 'ended') {
       unmute.hidden = true;
       showEnded('방송이 종료되었습니다.');

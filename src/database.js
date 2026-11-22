@@ -50,6 +50,36 @@ const MIGRATIONS = [
      updated_at  TEXT
    );
    CREATE INDEX comments_by_target ON comments(target_type, target_id, id)`,
+  // 4: 후원 주문과 모의 결제 서비스의 결제 기록
+  //    order_id·payment_key UNIQUE 로 한 결제가 두 번 적립되거나 두 주문에 쓰이지 않게 한다.
+  //    확정은 status='pending' 인 행만 'done' 으로 바꾸는 조건부 UPDATE 로 한 번만 성공한다.
+  `CREATE TABLE donations (
+     id              INTEGER PRIMARY KEY AUTOINCREMENT,
+     order_id        TEXT    NOT NULL UNIQUE,
+     donor_id        INTEGER NOT NULL REFERENCES members(id),
+     recipient_id    INTEGER NOT NULL REFERENCES members(id),
+     target_type     TEXT    NOT NULL CHECK (target_type IN ('broadcast', 'live')),
+     target_id       INTEGER NOT NULL,
+     amount          INTEGER NOT NULL CHECK (amount > 0),
+     message         TEXT    NOT NULL DEFAULT '',
+     provider        TEXT    NOT NULL,
+     status          TEXT    NOT NULL CHECK (status IN ('pending', 'done', 'failed', 'canceled', 'expired')),
+     payment_key     TEXT    UNIQUE,
+     failure_code    TEXT,
+     failure_message TEXT,
+     created_at      TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+     confirmed_at    TEXT,
+     CHECK (status <> 'done' OR payment_key IS NOT NULL)
+   );
+   CREATE INDEX donations_by_target ON donations(target_type, target_id, status);
+   CREATE TABLE mock_payments (
+     payment_key TEXT    PRIMARY KEY,
+     order_id    TEXT    NOT NULL UNIQUE,
+     amount      INTEGER NOT NULL,
+     status      TEXT    NOT NULL CHECK (status IN ('READY', 'DONE')),
+     created_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+     approved_at TEXT
+   )`,
 ];
 
 export function openDatabase(dbPath) {
